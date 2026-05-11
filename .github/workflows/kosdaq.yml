@@ -1,8 +1,6 @@
 name: Run KOSDAQ screener
 
 on:
-  schedule:
-    - cron: "30 6 * * 1-5"
   workflow_dispatch:
 
 jobs:
