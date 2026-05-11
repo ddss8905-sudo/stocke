@@ -112,7 +112,7 @@ export default async function Page({ searchParams }: PageProps) {
       <section className="topbar">
         <div>
           <p className="eyebrow">Trend Following Screener</p>
-          <h1>NASDAQ / KOSDAQ Screener</h1>
+          <h1>Market Screener</h1>
         </div>
         <MarketTabs active={market} />
       </section>
