@@ -1,4 +1,4 @@
-export type Market = "NASDAQ" | "KOSDAQ";
+export type Market = "NASDAQ" | "KOSDAQ" | "KOSPI_API";
 
 export type ScreeningRun = {
   id: string;
