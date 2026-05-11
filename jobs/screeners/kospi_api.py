@@ -67,7 +67,7 @@ CFG = MarketConfig(
 
 class KisClient:
     def __init__(self) -> None:
-        self.base_url = os.environ.get("KIS_BASE_URL", "https://openapi.koreainvestment.com:9443").rstrip("/")
+        self.base_url = (os.environ.get("KIS_BASE_URL") or "https://openapi.koreainvestment.com:9443").rstrip("/")
         self.app_key = os.environ["KIS_APP_KEY"]
         self.app_secret = os.environ["KIS_APP_SECRET"]
         self.access_token = os.environ.get("KIS_ACCESS_TOKEN") or self.fetch_access_token()
