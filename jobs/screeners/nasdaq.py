@@ -45,6 +45,19 @@ EXCLUDE_NAME_KEYWORDS = [
 ]
 
 
+BASE_TICKERS = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO", "TSLA", "COST",
+    "NFLX", "ADBE", "AMD", "INTC", "QCOM", "TXN", "AMAT", "MU", "PANW", "CRWD",
+    "PLTR", "ASML", "LRCX", "KLAC", "ADP", "INTU", "CSCO", "PEP", "SBUX", "BKNG",
+    "MELI", "MRVL", "SNPS", "CDNS", "MDB", "TEAM", "ZS", "DDOG", "SHOP", "ABNB",
+    "ARM", "SMCI", "PYPL", "GILD", "REGN", "VRTX", "BIIB", "MRNA", "DXCM", "IDXX",
+    "ADI", "APP", "AZN", "BKR", "CCEP", "CEG", "CHTR", "DASH", "EA", "EXC",
+    "FANG", "FTNT", "GEHC", "HON", "KDP", "LIN", "MAR", "MDLZ", "MNST", "NXPI",
+    "ORLY", "PCAR", "ROP", "ROST", "TTWO", "WDAY", "XEL", "MSTR", "RKLB", "SOUN",
+    "WDC", "STX", "MTSI", "SITM", "LSCC", "AEHR", "MXL", "AXTI",
+]
+
+
 def fetch_universe() -> pd.DataFrame:
     with urlopen(NASDAQ_LISTED_URL, timeout=30) as response:
         content = response.read().decode("utf-8")
@@ -107,9 +120,12 @@ def download_in_chunks(tickers: List[str], start: str, end: str, chunk_size: int
 
 
 def select_top_by_adv(end_date: str) -> pd.DataFrame:
-    universe = fetch_universe()
+    listed = fetch_universe()
+    listed_names = listed.set_index("ticker")["security_name"].to_dict()
+    base_rows = [{"ticker": ticker, "security_name": listed_names.get(ticker, ticker)} for ticker in BASE_TICKERS]
+    universe = pd.DataFrame(base_rows, columns=["ticker", "security_name"]).drop_duplicates("ticker")
     start = (date.fromisoformat(end_date) - timedelta(days=45)).isoformat()
-    recent = download_in_chunks(universe["ticker"].tolist(), start, end_date)
+    recent = download_in_chunks(universe["ticker"].tolist(), start, end_date, chunk_size=50)
     names = universe.set_index("ticker")["security_name"].to_dict()
 
     rows = []
@@ -123,16 +139,23 @@ def select_top_by_adv(end_date: str) -> pd.DataFrame:
             continue
         rows.append({"ticker": ticker, "security_name": names.get(ticker, ""), "close": float(last_close), "adv": float(adv)})
 
-    return pd.DataFrame(rows).sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
+    if not rows:
+        raise RuntimeError("No NASDAQ symbols were selected. Yahoo Finance returned no usable recent OHLCV data.")
+
+    return pd.DataFrame(rows, columns=["ticker", "security_name", "close", "adv"]).sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
 
 
 def run(end_date: str) -> dict:
     selected = select_top_by_adv(end_date)
+    if selected.empty:
+        raise RuntimeError("No NASDAQ symbols were selected by average dollar volume.")
     tickers = selected["ticker"].tolist()
     names = selected.set_index("ticker")["security_name"].to_dict()
     all_tickers = sorted(set(tickers + CFG.benchmark_tickers))
 
     ohlcv = download_ohlcv(all_tickers, start_date(end_date, CFG.lookback_days), end_date)
+    if CFG.benchmark_tickers[0] not in ohlcv or CFG.benchmark_tickers[1] not in ohlcv:
+        raise RuntimeError("NASDAQ benchmark data is missing. Please retry later.")
     primary = add_technical_features(ohlcv[CFG.benchmark_tickers[0]])
     secondary = add_technical_features(ohlcv[CFG.benchmark_tickers[1]])
     market_bullish = market_regime_is_bullish(primary)
