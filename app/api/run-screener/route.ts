@@ -4,10 +4,11 @@ import type { Market } from "@/lib/types";
 const WORKFLOWS: Record<Market, string> = {
   NASDAQ: "nasdaq.yml",
   KOSDAQ: "kosdaq.yml",
+  KOSPI_API: "kospi-api.yml",
 };
 
 function asMarket(value: unknown): Market | null {
-  return value === "NASDAQ" || value === "KOSDAQ" ? value : null;
+  return value === "NASDAQ" || value === "KOSDAQ" || value === "KOSPI_API" ? value : null;
 }
 
 export async function POST(request: NextRequest) {
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   const market = asMarket(body.market);
   if (!market) {
-    return NextResponse.json({ error: "market must be NASDAQ or KOSDAQ." }, { status: 400 });
+    return NextResponse.json({ error: "market must be NASDAQ, KOSDAQ, or KOSPI_API." }, { status: 400 });
   }
 
   const workflow = WORKFLOWS[market];
