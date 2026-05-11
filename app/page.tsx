@@ -8,9 +8,10 @@ type PageProps = {
   searchParams?: Promise<{ market?: string }>;
 };
 
-const markets: Market[] = ["NASDAQ", "KOSDAQ"];
+const markets: Market[] = ["NASDAQ", "KOSDAQ", "KOSPI_API"];
 
 function asMarket(value: string | undefined): Market {
+  if (value === "KOSPI_API") return "KOSPI_API";
   return value === "KOSDAQ" ? "KOSDAQ" : "NASDAQ";
 }
 
@@ -125,7 +126,7 @@ export default async function Page({ searchParams }: PageProps) {
       <section className="stats">
         <Stat label="Market" value={market} icon={<Database size={18} />} />
         <Stat label="Latest run" value={latestRun} icon={<Clock size={18} />} />
-        <Stat label="Run mode" value="On demand" icon={<Activity size={18} />} />
+        <Stat label="Run mode" value={market === "KOSPI_API" ? "KIS API" : "On demand"} icon={<Activity size={18} />} />
         <Stat label="Candidates" value={String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
         <Stat
           label="Regime"
