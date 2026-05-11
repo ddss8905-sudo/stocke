@@ -19,6 +19,18 @@ function number(value: number | null | undefined, digits = 1) {
   return Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
 }
 
+function dateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
 function MarketTabs({ active }: { active: Market }) {
   return (
     <div className="tabs" aria-label="Market selector">
@@ -92,7 +104,7 @@ export default async function Page({ searchParams }: PageProps) {
   const params = await searchParams;
   const market = asMarket(params?.market);
   const data = await getDashboardData(market);
-  const nextRun = market === "NASDAQ" ? "Daily 21:00 KST" : "Daily 15:30 KST";
+  const latestRun = dateTime(data.run?.finished_at) || data.run?.run_date || "-";
 
   return (
     <main>
@@ -112,8 +124,8 @@ export default async function Page({ searchParams }: PageProps) {
 
       <section className="stats">
         <Stat label="Market" value={market} icon={<Database size={18} />} />
-        <Stat label="Latest run" value={data.run?.run_date ?? "-"} icon={<Clock size={18} />} />
-        <Stat label="Scheduled run" value={nextRun} icon={<Activity size={18} />} />
+        <Stat label="Latest run" value={latestRun} icon={<Clock size={18} />} />
+        <Stat label="Run mode" value="On demand" icon={<Activity size={18} />} />
         <Stat label="Candidates" value={String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
         <Stat
           label="Regime"
