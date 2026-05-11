@@ -2,7 +2,7 @@ create extension if not exists pgcrypto;
 
 create table if not exists screening_runs (
   id uuid primary key default gen_random_uuid(),
-  market text not null check (market in ('NASDAQ', 'KOSDAQ')),
+  market text not null check (market in ('NASDAQ', 'KOSDAQ', 'KOSPI_API')),
   run_date date not null,
   status text not null default 'completed',
   market_bullish boolean not null default false,
@@ -17,7 +17,7 @@ create table if not exists screening_runs (
 create table if not exists screening_results (
   id bigserial primary key,
   run_id uuid not null references screening_runs(id) on delete cascade,
-  market text not null check (market in ('NASDAQ', 'KOSDAQ')),
+  market text not null check (market in ('NASDAQ', 'KOSDAQ', 'KOSPI_API')),
   run_date date not null,
   ticker text not null,
   security_name text,
