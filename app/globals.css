@@ -153,6 +153,73 @@ h2 {
   margin-top: 6px;
 }
 
+.runPanel {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.primaryButton,
+.secondaryButton {
+  align-items: center;
+  border-radius: 8px;
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 760;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px 14px;
+  text-decoration: none;
+}
+
+.primaryButton {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.primaryButton:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.secondaryButton {
+  background: #f2f5f0;
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.runMessage {
+  color: var(--muted);
+  flex-basis: 100%;
+  font-size: 14px;
+}
+
+.runMessage.success {
+  color: var(--accent);
+}
+
+.runMessage.error {
+  color: var(--warn);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .tableWrap {
   overflow-x: auto;
 }
