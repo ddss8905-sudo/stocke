@@ -1,10 +1,12 @@
 import argparse
 import json
+import math
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -20,8 +22,26 @@ RUNNERS = {
 def records(df: pd.DataFrame) -> list:
     if df.empty:
         return []
-    clean = df.replace({pd.NA: None}).where(pd.notnull(df), None)
-    return clean.to_dict(orient="records")
+    clean = df.replace([np.inf, -np.inf], np.nan).where(pd.notnull(df), None)
+    return [sanitize_record(row) for row in clean.to_dict(orient="records")]
+
+
+def sanitize_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        value = float(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    return value
+
+
+def sanitize_record(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: sanitize_value(value) for key, value in row.items()}
 
 
 def write_local_payload(payload: Dict[str, Any], output_dir: Path) -> Path:
@@ -44,7 +64,10 @@ def supabase_headers() -> Dict[str, str]:
 def insert_supabase(table: str, body: Any) -> requests.Response:
     url = f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/{table}"
     response = requests.post(url, headers=supabase_headers(), json=body, timeout=60)
-    response.raise_for_status()
+    if not response.ok:
+        print(f"[ERROR] Supabase insert failed: table={table} status={response.status_code}")
+        print(response.text[:2000])
+        response.raise_for_status()
     return response
 
 
@@ -75,7 +98,7 @@ def upload_to_supabase(payload: Dict[str, Any]) -> None:
         row["entry_trigger"] = bool(candidate.get("entry_trigger")) if candidate else False
         row["stop_price"] = candidate.get("stop_price") if candidate else None
         row["risk_to_stop"] = candidate.get("risk_to_stop") if candidate else None
-        result_rows.append(row)
+        result_rows.append(sanitize_record(row))
 
     if result_rows:
         for index in range(0, len(result_rows), 250):
