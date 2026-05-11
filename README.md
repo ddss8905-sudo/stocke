@@ -3,13 +3,13 @@
 NASDAQ and KOSDAQ trend-following screener dashboard for Vercel.
 
 ## Architecture
-- GitHub Actions runs the Python screeners.
+- GitHub Actions runs the Python screeners on demand.
 - Supabase stores screening runs and results.
 - Vercel hosts the Next.js dashboard.
 
-## Schedules
-- NASDAQ: 21:00 KST, stored as `0 12 * * 1-5` UTC in GitHub Actions.
-- KOSDAQ: 15:30 KST, stored as `30 6 * * 1-5` UTC in GitHub Actions.
+## Execution
+- NASDAQ and KOSDAQ run on demand from the dashboard.
+- GitHub Actions workflows keep `workflow_dispatch` enabled and do not run on a daily schedule.
 
 ## Setup
 1. Create a Supabase project.
