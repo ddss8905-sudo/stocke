@@ -1,6 +1,8 @@
+import type { ReactNode } from "react";
 import { Activity, ArrowDownRight, ArrowUpRight, Clock, Database, Filter } from "lucide-react";
 import { getDashboardData } from "@/lib/data";
 import type { Market, ScreeningResult } from "@/lib/types";
+import { RunButtons } from "./run-buttons";
 
 type PageProps = {
   searchParams?: Promise<{ market?: string }>;
@@ -17,14 +19,9 @@ function number(value: number | null | undefined, digits = 1) {
   return Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
 }
 
-function percent(value: number | null | undefined) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
-  return `${(Number(value) * 100).toFixed(1)}%`;
-}
-
 function MarketTabs({ active }: { active: Market }) {
   return (
-    <div className="tabs" aria-label="시장 선택">
+    <div className="tabs" aria-label="Market selector">
       {markets.map((market) => (
         <a className={market === active ? "tab active" : "tab"} href={`/?market=${market}`} key={market}>
           {market}
@@ -34,7 +31,7 @@ function MarketTabs({ active }: { active: Market }) {
   );
 }
 
-function Stat({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
+function Stat({ label, value, icon }: { label: string; value: string; icon: ReactNode }) {
   return (
     <div className="stat">
       <div className="statIcon">{icon}</div>
@@ -52,15 +49,15 @@ function ResultTable({ rows, compact = false }: { rows: ScreeningResult[]; compa
       <table>
         <thead>
           <tr>
-            <th>종목</th>
-            <th>종목명</th>
-            <th>종가</th>
-            <th>최종</th>
+            <th>Ticker</th>
+            <th>Name</th>
+            <th>Close</th>
+            <th>Final</th>
             <th>RS</th>
-            <th>추세</th>
-            <th>돌파</th>
-            <th>거래대금</th>
-            {!compact && <th>손절가</th>}
+            <th>Trend</th>
+            <th>Breakout</th>
+            <th>ADV20</th>
+            {!compact && <th>Stop</th>}
           </tr>
         </thead>
         <tbody>
@@ -82,7 +79,7 @@ function ResultTable({ rows, compact = false }: { rows: ScreeningResult[]; compa
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="empty" colSpan={compact ? 8 : 9}>표시할 결과가 없습니다.</td>
+              <td className="empty" colSpan={compact ? 8 : 9}>No results to display.</td>
             </tr>
           )}
         </tbody>
@@ -95,32 +92,32 @@ export default async function Page({ searchParams }: PageProps) {
   const params = await searchParams;
   const market = asMarket(params?.market);
   const data = await getDashboardData(market);
-  const nextRun = market === "NASDAQ" ? "매일 21:00 KST" : "매일 15:30 KST";
+  const nextRun = market === "NASDAQ" ? "Daily 21:00 KST" : "Daily 15:30 KST";
 
   return (
     <main>
       <section className="topbar">
         <div>
           <p className="eyebrow">Trend Following Screener</p>
-          <h1>NASDAQ / KOSDAQ 자동 스크리닝</h1>
+          <h1>NASDAQ / KOSDAQ Screener</h1>
         </div>
         <MarketTabs active={market} />
       </section>
 
       {data.usingSampleData && (
         <div className="notice">
-          Supabase 환경변수가 아직 없어서 샘플 데이터를 표시 중입니다. DB 연결 후 최신 스크리닝 결과가 자동으로 표시됩니다.
+          Supabase environment variables are missing, so sample rows are shown. Connect Supabase to display live screening results.
         </div>
       )}
 
       <section className="stats">
-        <Stat label="선택 시장" value={market} icon={<Database size={18} />} />
-        <Stat label="최근 실행일" value={data.run?.run_date ?? "-"} icon={<Clock size={18} />} />
-        <Stat label="다음 자동 실행" value={nextRun} icon={<Activity size={18} />} />
-        <Stat label="후보 수" value={String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
+        <Stat label="Market" value={market} icon={<Database size={18} />} />
+        <Stat label="Latest run" value={data.run?.run_date ?? "-"} icon={<Clock size={18} />} />
+        <Stat label="Scheduled run" value={nextRun} icon={<Activity size={18} />} />
+        <Stat label="Candidates" value={String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
         <Stat
-          label="시장 상태"
-          value={data.run ? (data.run.market_bullish ? "상승 우위" : "방어 필요") : "-"}
+          label="Regime"
+          value={data.run ? (data.run.market_bullish ? "Bullish" : "Defensive") : "-"}
           icon={data.run?.market_bullish ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
         />
       </section>
@@ -128,8 +125,18 @@ export default async function Page({ searchParams }: PageProps) {
       <section className="section">
         <div className="sectionHead">
           <div>
-            <h2>오늘의 후보</h2>
-            <p>최종 점수, 상대강도, 유동성, 고점 근접도, 손절폭 조건을 통과한 종목입니다.</p>
+            <h2>Run on demand</h2>
+            <p>Trigger the selected market workflow in GitHub Actions, then refresh after it completes.</p>
+          </div>
+        </div>
+        <RunButtons market={market} />
+      </section>
+
+      <section className="section">
+        <div className="sectionHead">
+          <div>
+            <h2>Candidate List</h2>
+            <p>Stocks that passed score, relative strength, liquidity, high proximity, and stop-risk filters.</p>
           </div>
         </div>
         <ResultTable rows={data.candidates} />
@@ -138,8 +145,8 @@ export default async function Page({ searchParams }: PageProps) {
       <section className="section">
         <div className="sectionHead">
           <div>
-            <h2>전체 스코어</h2>
-            <p>거래대금 상위 200개 대상의 종합 점수표입니다.</p>
+            <h2>Full Scoreboard</h2>
+            <p>Ranked scoring table for the current screening universe.</p>
           </div>
         </div>
         <ResultTable rows={data.scored} compact />
