@@ -1,11 +1,11 @@
 import csv
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Dict, List
 from urllib.request import urlopen
 
 import pandas as pd
-import yfinance as yf
+import requests
 
 from .common import (
     MarketConfig,
@@ -79,35 +79,58 @@ def fetch_universe() -> pd.DataFrame:
 
 
 def download_ohlcv(tickers: List[str], start: str, end: str) -> Dict[str, pd.DataFrame]:
-    if not tickers:
-        return {}
-
-    data = yf.download(
-        tickers=tickers,
-        start=start,
-        end=end,
-        auto_adjust=False,
-        group_by="ticker",
-        progress=False,
-        threads=True,
-    )
-
     result: Dict[str, pd.DataFrame] = {}
-    if len(tickers) == 1:
-        ticker = tickers[0]
-        df = data.rename(columns=str.lower).copy()
-        if all(c in df.columns for c in OHLCV_COLUMNS):
-            result[ticker] = df[OHLCV_COLUMNS].dropna()
-        return result
-
     for ticker in tickers:
-        if ticker not in data.columns.get_level_values(0):
+        df = download_yahoo_chart(ticker, start, end)
+        if df.empty:
             continue
-        df = data[ticker].copy()
-        df.columns = [c.lower() for c in df.columns]
-        if all(c in df.columns for c in OHLCV_COLUMNS):
-            result[ticker] = df[OHLCV_COLUMNS].dropna()
+        result[ticker] = df
     return result
+
+
+def unix_time(value: str) -> int:
+    return int(datetime.fromisoformat(value).replace(tzinfo=timezone.utc).timestamp())
+
+
+def download_yahoo_chart(ticker: str, start: str, end: str) -> pd.DataFrame:
+    period1 = unix_time(start)
+    period2 = unix_time((date.fromisoformat(end) + timedelta(days=1)).isoformat())
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {
+        "period1": period1,
+        "period2": period2,
+        "interval": "1d",
+        "events": "history",
+        "includeAdjustedClose": "true",
+    }
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        if not result:
+            print(f"[WARN] no Yahoo chart result for {ticker}")
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+        timestamps = result.get("timestamp") or []
+        quote = (result.get("indicators", {}).get("quote") or [None])[0]
+        if not timestamps or not quote:
+            print(f"[WARN] no Yahoo OHLCV quote for {ticker}")
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+        df = pd.DataFrame({
+            "open": quote.get("open"),
+            "high": quote.get("high"),
+            "low": quote.get("low"),
+            "close": quote.get("close"),
+            "volume": quote.get("volume"),
+        }, index=pd.to_datetime(timestamps, unit="s").date)
+        return df[OHLCV_COLUMNS].dropna()
+    except Exception as exc:
+        print(f"[WARN] failed to download {ticker}: {exc}")
+        return pd.DataFrame(columns=OHLCV_COLUMNS)
 
 
 def download_in_chunks(tickers: List[str], start: str, end: str, chunk_size: int = 200) -> Dict[str, pd.DataFrame]:
