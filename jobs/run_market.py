@@ -10,12 +10,13 @@ import numpy as np
 import pandas as pd
 import requests
 
-from screeners import kosdaq, nasdaq
+from screeners import kosdaq, kospi_api, nasdaq
 
 
 RUNNERS = {
     "NASDAQ": nasdaq.run,
     "KOSDAQ": kosdaq.run,
+    "KOSPI_API": kospi_api.run,
 }
 
 
