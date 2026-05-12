@@ -7,7 +7,6 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 import requests
-from pykrx import stock
 
 from .common import (
     MarketConfig,
@@ -50,20 +49,6 @@ def krx_date(value: str) -> str:
 
 
 def resolve_latest_trading_date(end_date: str) -> str:
-    current = date.fromisoformat(end_date)
-    last_error = None
-    for _ in range(1095):
-        try:
-            df = stock.get_market_ohlcv_by_ticker(krx_date(current.isoformat()), market="KOSPI")
-        except Exception as exc:
-            last_error = exc
-            df = pd.DataFrame()
-        if not df.empty:
-            return current.isoformat()
-        current = current - timedelta(days=1)
-    if last_error:
-        print(f"[WARN] pykrx KOSPI trading-date lookup failed repeatedly: {last_error}")
-    print(f"[WARN] pykrx returned no KOSPI trading date before {end_date}; using requested date.")
     return end_date
 
 
@@ -142,45 +127,6 @@ def to_float_text(value: str) -> float:
     return float(text) if text else float("nan")
 
 
-def fetch_top_by_current_value(end_date: str) -> pd.DataFrame:
-    try:
-        latest = stock.get_market_ohlcv_by_ticker(krx_date(end_date), market="KOSPI")
-    except Exception as exc:
-        print(f"[WARN] pykrx current KOSPI value lookup failed: {exc}")
-        latest = pd.DataFrame()
-    if latest.empty:
-        print("[WARN] pykrx current KOSPI value data is empty; using Naver Finance fallback.")
-        naver = fetch_naver_current_value()
-        if naver.empty:
-            return pd.DataFrame(columns=SELECTED_COLUMNS)
-        return (
-            naver.rename(columns={"value": "adv"})[SELECTED_COLUMNS]
-            .sort_values("adv", ascending=False)
-            .head(CFG.universe_size)
-            .reset_index(drop=True)
-        )
-
-    rows = []
-    for ticker, row in latest.iterrows():
-        row = latest.loc[ticker]
-        name = stock.get_market_ticker_name(ticker)
-        if is_excluded_name(name):
-            continue
-
-        close = market_ohlcv_value(row, "close", 3)
-        volume = market_ohlcv_value(row, "volume", 4)
-        trading_value = market_ohlcv_value(row, "value", 5)
-        if pd.isna(trading_value) and not pd.isna(close) and not pd.isna(volume):
-            trading_value = close * volume
-        if pd.isna(trading_value) or pd.isna(close) or close < CFG.min_price:
-            continue
-        rows.append({"ticker": ticker, "security_name": name, "close": float(close), "adv": float(trading_value)})
-
-    if not rows:
-        return pd.DataFrame(columns=SELECTED_COLUMNS)
-    return pd.DataFrame(rows, columns=SELECTED_COLUMNS).sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
-
-
 class KisClient:
     def __init__(self) -> None:
         self.base_url = (os.environ.get("KIS_BASE_URL") or "https://openapi.koreainvestment.com:9443").rstrip("/")
@@ -211,6 +157,49 @@ class KisClient:
             "tr_id": tr_id,
             "custtype": "P",
         }
+
+    def volume_rank(self) -> pd.DataFrame:
+        response = requests.get(
+            f"{self.base_url}/uapi/domestic-stock/v1/quotations/volume-rank",
+            headers=self.headers("FHPST01710000"),
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_COND_SCR_DIV_CODE": "20171",
+                "FID_INPUT_ISCD": "0000",
+                "FID_DIV_CLS_CODE": "1",
+                "FID_BLNG_CLS_CODE": "3",
+                "FID_TRGT_CLS_CODE": "111111111",
+                "FID_TRGT_EXLS_CLS_CODE": "0000000000",
+                "FID_INPUT_PRICE_1": "",
+                "FID_INPUT_PRICE_2": "",
+                "FID_VOL_CNT": "",
+                "FID_INPUT_DATE_1": "",
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("rt_cd") not in (None, "0"):
+            print(f"[WARN] KIS volume-rank failed: {payload.get('msg1') or payload}")
+            return pd.DataFrame(columns=SELECTED_COLUMNS)
+
+        rows = []
+        for row in payload.get("output") or []:
+            ticker = row.get("mksc_shrn_iscd") or row.get("stck_shrn_iscd")
+            name = row.get("hts_kor_isnm") or row.get("stck_kor_isnm") or ticker
+            if not ticker or is_excluded_name(name):
+                continue
+            close = parse_number(row.get("stck_prpr"))
+            trading_value = parse_number(row.get("acml_tr_pbmn"))
+            if pd.isna(trading_value):
+                trading_value = parse_number(row.get("avrg_vol") or row.get("vol_tnrt"))
+            if pd.isna(trading_value) or pd.isna(close) or close < CFG.min_price:
+                continue
+            rows.append({"ticker": ticker, "security_name": name, "close": float(close), "adv": float(trading_value)})
+
+        if not rows:
+            return pd.DataFrame(columns=SELECTED_COLUMNS)
+        return pd.DataFrame(rows, columns=SELECTED_COLUMNS).sort_values("adv", ascending=False).reset_index(drop=True)
 
     def daily_chart(self, ticker: str, start: str, end: str) -> pd.DataFrame:
         start_dt = date.fromisoformat(start)
@@ -270,6 +259,33 @@ def to_number(values) -> pd.Series:
     return pd.to_numeric(pd.Series(values).astype(str).str.replace(",", "", regex=False), errors="coerce")
 
 
+def parse_number(value) -> float:
+    if value is None:
+        return float("nan")
+    text = str(value).replace(",", "").strip()
+    if not text:
+        return float("nan")
+    return pd.to_numeric(text, errors="coerce")
+
+
+def fetch_top_by_current_value(client: KisClient) -> pd.DataFrame:
+    selected = client.volume_rank()
+    if not selected.empty:
+        print(f"[INFO] KIS volume-rank returned {len(selected)} rows")
+    if len(selected) >= CFG.universe_size:
+        return selected.head(CFG.universe_size).reset_index(drop=True)
+
+    print("[WARN] KIS volume-rank returns at most about 30 rows; supplementing with Naver Finance fallback.")
+    naver = fetch_naver_current_value()
+    if naver.empty:
+        return selected[SELECTED_COLUMNS].reset_index(drop=True)
+
+    supplement = naver.rename(columns={"value": "adv"})[SELECTED_COLUMNS]
+    combined = pd.concat([selected[SELECTED_COLUMNS], supplement], ignore_index=True)
+    combined = combined.drop_duplicates(subset=["ticker"], keep="first")
+    return combined.sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
+
+
 def download_ohlcv(tickers: List[str], start: str, end: str, client: KisClient) -> Dict[str, pd.DataFrame]:
     result: Dict[str, pd.DataFrame] = {}
     for ticker in sorted(set(tickers)):
@@ -294,7 +310,7 @@ def retain_downloaded_universe(ohlcv: Dict[str, pd.DataFrame], universe: pd.Data
 def run(end_date: str) -> dict:
     client = KisClient()
     effective_end_date = resolve_latest_trading_date(end_date)
-    selected = fetch_top_by_current_value(effective_end_date)
+    selected = fetch_top_by_current_value(client)
     tickers = selected["ticker"].tolist()
     names = selected.set_index("ticker")["security_name"].to_dict()
     all_tickers = sorted(set(tickers + CFG.benchmark_tickers))
