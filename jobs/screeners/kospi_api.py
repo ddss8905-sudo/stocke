@@ -17,6 +17,7 @@ from .common import (
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
+SELECTED_COLUMNS = ["ticker", "security_name", "close", "adv"]
 
 KOSPI_UNIVERSE = [
     ("005930", "Samsung Electronics"),
@@ -118,14 +119,21 @@ class KisClient:
 
         df = pd.DataFrame(rows)
         normalized = pd.DataFrame({
-            "open": pd.to_numeric(df["stck_oprc"], errors="coerce"),
-            "high": pd.to_numeric(df["stck_hgpr"], errors="coerce"),
-            "low": pd.to_numeric(df["stck_lwpr"], errors="coerce"),
-            "close": pd.to_numeric(df["stck_clpr"], errors="coerce"),
-            "volume": pd.to_numeric(df["acml_vol"], errors="coerce"),
-            "value": pd.to_numeric(df.get("acml_tr_pbmn"), errors="coerce"),
+            "open": to_number(df["stck_oprc"]).to_numpy(),
+            "high": to_number(df["stck_hgpr"]).to_numpy(),
+            "low": to_number(df["stck_lwpr"]).to_numpy(),
+            "close": to_number(df["stck_clpr"]).to_numpy(),
+            "volume": to_number(df["acml_vol"]).to_numpy(),
+            "value": to_number(df["acml_tr_pbmn"] if "acml_tr_pbmn" in df else [None] * len(df)).to_numpy(),
         }, index=pd.to_datetime(df["stck_bsop_date"]).dt.date)
+        normalized["value"] = normalized["value"].fillna(normalized["close"] * normalized["volume"])
         return normalized.sort_index()[OHLCV_COLUMNS + ["value"]].dropna(subset=OHLCV_COLUMNS)
+
+
+def to_number(values) -> pd.Series:
+    if values is None:
+        return pd.Series(dtype="float64")
+    return pd.to_numeric(pd.Series(values).astype(str).str.replace(",", "", regex=False), errors="coerce")
 
 
 def download_ohlcv(tickers: List[str], start: str, end: str, client: KisClient) -> Dict[str, pd.DataFrame]:
@@ -148,7 +156,8 @@ def select_top_by_adv(ohlcv: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         if ticker in CFG.benchmark_tickers or len(df) < 20:
             continue
         tail = df.tail(20)
-        trading_value = tail["value"] if "value" in tail.columns else tail["close"] * tail["volume"]
+        fallback_value = tail["close"] * tail["volume"]
+        trading_value = tail["value"].fillna(fallback_value) if "value" in tail.columns else fallback_value
         adv = trading_value.mean()
         last_close = tail["close"].iloc[-1]
         if pd.isna(adv) or pd.isna(last_close) or last_close < CFG.min_price:
@@ -156,9 +165,10 @@ def select_top_by_adv(ohlcv: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         rows.append({"ticker": ticker, "security_name": names.get(ticker, ticker), "close": float(last_close), "adv": float(adv)})
 
     if not rows:
-        raise RuntimeError("No KOSPI_API symbols were selected from KIS daily chart data.")
+        print("[WARN] No KOSPI_API symbols were selected from KIS daily chart data.")
+        return pd.DataFrame(columns=SELECTED_COLUMNS)
 
-    return pd.DataFrame(rows, columns=["ticker", "security_name", "close", "adv"]).sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
+    return pd.DataFrame(rows, columns=SELECTED_COLUMNS).sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
 
 
 def run(end_date: str) -> dict:
@@ -173,7 +183,15 @@ def run(end_date: str) -> dict:
     names = selected.set_index("ticker")["security_name"].to_dict()
 
     if CFG.benchmark_tickers[0] not in ohlcv or CFG.benchmark_tickers[1] not in ohlcv:
-        raise RuntimeError("KOSPI_API benchmark ETF data is missing from KIS.")
+        print("[WARN] KOSPI_API benchmark ETF data is missing from KIS.")
+        return {
+            "market": CFG.market,
+            "run_date": end_date,
+            "selected": selected,
+            "scored": pd.DataFrame(),
+            "candidates": pd.DataFrame(),
+            "market_bullish": False,
+        }
 
     primary = add_technical_features(ohlcv[CFG.benchmark_tickers[0]])
     secondary = add_technical_features(ohlcv[CFG.benchmark_tickers[1]])
