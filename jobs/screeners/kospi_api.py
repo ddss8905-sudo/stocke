@@ -1,6 +1,9 @@
 import os
+import re
 from datetime import date, timedelta
 from typing import Dict, List
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import requests
@@ -19,6 +22,7 @@ from .common import (
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 SELECTED_COLUMNS = ["ticker", "security_name", "close", "adv"]
+NAVER_COLUMNS = ["ticker", "security_name", "close", "volume", "value"]
 EXCLUDE_NAME_KEYWORDS = [
     "ETF", "ETN",
     "KODEX", "TIGER", "ACE", "KBSTAR", "SOL", "HANARO", "KOSEF",
@@ -47,15 +51,20 @@ def krx_date(value: str) -> str:
 
 def resolve_latest_trading_date(end_date: str) -> str:
     current = date.fromisoformat(end_date)
+    last_error = None
     for _ in range(1095):
         try:
             df = stock.get_market_ohlcv_by_ticker(krx_date(current.isoformat()), market="KOSPI")
-        except Exception:
+        except Exception as exc:
+            last_error = exc
             df = pd.DataFrame()
         if not df.empty:
             return current.isoformat()
         current = current - timedelta(days=1)
-    raise RuntimeError(f"No available KRX trading date found before {end_date}.")
+    if last_error:
+        print(f"[WARN] pykrx KOSPI trading-date lookup failed repeatedly: {last_error}")
+    print(f"[WARN] pykrx returned no KOSPI trading date before {end_date}; using requested date.")
+    return end_date
 
 
 def is_excluded_name(name: str) -> bool:
@@ -71,13 +80,85 @@ def market_ohlcv_value(row: pd.Series, english_name: str, fallback_position: int
     return float("nan")
 
 
+def fetch_naver_current_value() -> pd.DataFrame:
+    rows = []
+    seen = set()
+    headers = {"User-Agent": "Mozilla/5.0"}
+    link_pattern = re.compile(r'/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>')
+    number_pattern = re.compile(r'<td class="number">([^<]*)</td>')
+
+    for page in range(1, 45):
+        params = [
+            ("sosok", "0"),
+            ("page", str(page)),
+            ("fieldIds", "quant"),
+            ("fieldIds", "amount"),
+        ]
+        url = f"https://finance.naver.com/sise/sise_market_sum.naver?{urlencode(params)}"
+        try:
+            with urlopen(Request(url, headers=headers), timeout=30) as response:
+                html = response.read().decode("euc-kr", errors="ignore")
+        except Exception as exc:
+            print(f"[WARN] failed to fetch Naver KOSPI page {page}: {exc}")
+            continue
+
+        matches = list(link_pattern.finditer(html))
+        if not matches:
+            break
+
+        for index, match in enumerate(matches):
+            ticker, name = match.group(1), match.group(2).strip()
+            if ticker in seen or is_excluded_name(name):
+                continue
+            next_start = matches[index + 1].start() if index + 1 < len(matches) else len(html)
+            row_html = html[match.end():next_start]
+            numbers = [to_float_text(value) for value in number_pattern.findall(row_html)]
+            if len(numbers) < 4:
+                continue
+
+            close = numbers[0]
+            volume = numbers[2]
+            trading_value_million = numbers[3]
+            trading_value = trading_value_million * 1_000_000
+            if pd.isna(close) or pd.isna(trading_value) or close < CFG.min_price:
+                continue
+
+            seen.add(ticker)
+            rows.append({
+                "ticker": ticker,
+                "security_name": name,
+                "close": float(close),
+                "volume": float(volume) if not pd.isna(volume) else None,
+                "value": float(trading_value),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=NAVER_COLUMNS)
+    return pd.DataFrame(rows, columns=NAVER_COLUMNS)
+
+
+def to_float_text(value: str) -> float:
+    text = re.sub(r"[^0-9.\-]", "", value)
+    return float(text) if text else float("nan")
+
+
 def fetch_top_by_current_value(end_date: str) -> pd.DataFrame:
     try:
         latest = stock.get_market_ohlcv_by_ticker(krx_date(end_date), market="KOSPI")
-    except Exception:
+    except Exception as exc:
+        print(f"[WARN] pykrx current KOSPI value lookup failed: {exc}")
         latest = pd.DataFrame()
     if latest.empty:
-        return pd.DataFrame(columns=SELECTED_COLUMNS)
+        print("[WARN] pykrx current KOSPI value data is empty; using Naver Finance fallback.")
+        naver = fetch_naver_current_value()
+        if naver.empty:
+            return pd.DataFrame(columns=SELECTED_COLUMNS)
+        return (
+            naver.rename(columns={"value": "adv"})[SELECTED_COLUMNS]
+            .sort_values("adv", ascending=False)
+            .head(CFG.universe_size)
+            .reset_index(drop=True)
+        )
 
     rows = []
     for ticker, row in latest.iterrows():
