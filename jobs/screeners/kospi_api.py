@@ -4,6 +4,7 @@ from typing import Dict, List
 
 import pandas as pd
 import requests
+from pykrx import stock
 
 from .common import (
     MarketConfig,
@@ -18,36 +19,10 @@ from .common import (
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 SELECTED_COLUMNS = ["ticker", "security_name", "close", "adv"]
-
-KOSPI_UNIVERSE = [
-    ("005930", "Samsung Electronics"),
-    ("000660", "SK hynix"),
-    ("373220", "LG Energy Solution"),
-    ("207940", "Samsung Biologics"),
-    ("005380", "Hyundai Motor"),
-    ("000270", "Kia"),
-    ("068270", "Celltrion"),
-    ("035420", "NAVER"),
-    ("005490", "POSCO Holdings"),
-    ("051910", "LG Chem"),
-    ("006400", "Samsung SDI"),
-    ("028260", "Samsung C&T"),
-    ("105560", "KB Financial Group"),
-    ("055550", "Shinhan Financial Group"),
-    ("012330", "Hyundai Mobis"),
-    ("066570", "LG Electronics"),
-    ("096770", "SK Innovation"),
-    ("003670", "POSCO Future M"),
-    ("017670", "SK Telecom"),
-    ("032830", "Samsung Life"),
-    ("402340", "SK Square"),
-    ("000990", "DB HiTek"),
-    ("011070", "LG Innotek"),
-    ("353200", "Daeduck Electronics"),
-    ("307950", "Hyundai Autoever"),
-    ("336260", "Doosan Fuel Cell"),
-    ("023530", "Lotte Shopping"),
-    ("004710", "Hansol Technics"),
+EXCLUDE_NAME_KEYWORDS = [
+    "ETF", "ETN",
+    "KODEX", "TIGER", "ACE", "KBSTAR", "SOL", "HANARO", "KOSEF",
+    "ARIRANG", "TIMEFOLIO", "PLUS", "RISE", "WON",
 ]
 
 CFG = MarketConfig(
@@ -64,6 +39,85 @@ CFG = MarketConfig(
     max_risk_to_stop=0.10,
     benchmark_tickers=["069500", "102110"],
 )
+
+
+def krx_date(value: str) -> str:
+    return value.replace("-", "")
+
+
+def resolve_latest_trading_date(end_date: str) -> str:
+    current = date.fromisoformat(end_date)
+    for _ in range(1095):
+        try:
+            df = stock.get_market_ohlcv_by_ticker(krx_date(current.isoformat()), market="KOSPI")
+        except Exception:
+            df = pd.DataFrame()
+        if not df.empty:
+            return current.isoformat()
+        current = current - timedelta(days=1)
+    raise RuntimeError(f"No available KRX trading date found before {end_date}.")
+
+
+def is_excluded_name(name: str) -> bool:
+    normalized = name.lower()
+    return any(keyword.lower() in normalized for keyword in EXCLUDE_NAME_KEYWORDS)
+
+
+def market_ohlcv_value(row: pd.Series, english_name: str, fallback_position: int) -> float:
+    if english_name in row:
+        return pd.to_numeric(row[english_name], errors="coerce")
+    if len(row) > fallback_position:
+        return pd.to_numeric(row.iloc[fallback_position], errors="coerce")
+    return float("nan")
+
+
+def fetch_top_by_adv(end_date: str) -> pd.DataFrame:
+    frames = []
+    current = date.fromisoformat(end_date)
+    cutoff = current - timedelta(days=45)
+    while len(frames) < 20 and current >= cutoff:
+        try:
+            df = stock.get_market_ohlcv_by_ticker(krx_date(current.isoformat()), market="KOSPI")
+        except Exception:
+            df = pd.DataFrame()
+        if not df.empty:
+            frames.append(df)
+        current = current - timedelta(days=1)
+
+    if not frames:
+        return pd.DataFrame(columns=SELECTED_COLUMNS)
+
+    latest = frames[0]
+    value_by_ticker: Dict[str, List[float]] = {}
+    for df in frames:
+        for ticker, row in df.iterrows():
+            close = market_ohlcv_value(row, "close", 3)
+            volume = market_ohlcv_value(row, "volume", 4)
+            value = market_ohlcv_value(row, "value", 5)
+            if pd.isna(value) and not pd.isna(close) and not pd.isna(volume):
+                value = close * volume
+            if pd.isna(value):
+                continue
+            value_by_ticker.setdefault(ticker, []).append(float(value))
+
+    rows = []
+    for ticker, values in value_by_ticker.items():
+        if len(values) < 10 or ticker not in latest.index:
+            continue
+        row = latest.loc[ticker]
+        name = stock.get_market_ticker_name(ticker)
+        if is_excluded_name(name):
+            continue
+
+        close = market_ohlcv_value(row, "close", 3)
+        adv = sum(values) / len(values)
+        if pd.isna(adv) or pd.isna(close) or close < CFG.min_price:
+            continue
+        rows.append({"ticker": ticker, "security_name": name, "close": float(close), "adv": float(adv)})
+
+    if not rows:
+        return pd.DataFrame(columns=SELECTED_COLUMNS)
+    return pd.DataFrame(rows, columns=SELECTED_COLUMNS).sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
 
 
 class KisClient:
@@ -98,6 +152,25 @@ class KisClient:
         }
 
     def daily_chart(self, ticker: str, start: str, end: str) -> pd.DataFrame:
+        start_dt = date.fromisoformat(start)
+        end_dt = date.fromisoformat(end)
+        frames = []
+
+        chunk_start = start_dt
+        while chunk_start <= end_dt:
+            chunk_end = min(chunk_start + timedelta(days=89), end_dt)
+            frames.append(self._daily_chart_chunk(ticker, chunk_start.isoformat(), chunk_end.isoformat()))
+            chunk_start = chunk_end + timedelta(days=1)
+
+        frames = [frame for frame in frames if not frame.empty]
+        if not frames:
+            return pd.DataFrame(columns=OHLCV_COLUMNS + ["value"])
+
+        combined = pd.concat(frames).sort_index()
+        combined = combined[~combined.index.duplicated(keep="last")]
+        return combined[OHLCV_COLUMNS + ["value"]]
+
+    def _daily_chart_chunk(self, ticker: str, start: str, end: str) -> pd.DataFrame:
         response = requests.get(
             f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
             headers=self.headers("FHKST03010100"),
@@ -149,8 +222,8 @@ def download_ohlcv(tickers: List[str], start: str, end: str, client: KisClient) 
     return result
 
 
-def select_top_by_adv(ohlcv: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-    names = dict(KOSPI_UNIVERSE)
+def select_top_by_adv(ohlcv: Dict[str, pd.DataFrame], universe: pd.DataFrame) -> pd.DataFrame:
+    names = universe.set_index("ticker")["security_name"].to_dict()
     rows = []
     for ticker, df in ohlcv.items():
         if ticker in CFG.benchmark_tickers or len(df) < 20:
@@ -173,20 +246,23 @@ def select_top_by_adv(ohlcv: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 def run(end_date: str) -> dict:
     client = KisClient()
-    start = start_date(end_date, CFG.lookback_days)
-    universe_tickers = [ticker for ticker, _ in KOSPI_UNIVERSE]
-    all_tickers = sorted(set(universe_tickers + CFG.benchmark_tickers))
-
-    ohlcv = download_ohlcv(all_tickers, start, end_date, client)
-    selected = select_top_by_adv(ohlcv)
+    effective_end_date = resolve_latest_trading_date(end_date)
+    selected = fetch_top_by_adv(effective_end_date)
     tickers = selected["ticker"].tolist()
     names = selected.set_index("ticker")["security_name"].to_dict()
+    all_tickers = sorted(set(tickers + CFG.benchmark_tickers))
+
+    ohlcv = download_ohlcv(all_tickers, start_date(effective_end_date, CFG.lookback_days), effective_end_date, client)
+    selected = select_top_by_adv(ohlcv, selected)
+    tickers = selected["ticker"].tolist()
+    names = selected.set_index("ticker")["security_name"].to_dict()
+    print(f"[INFO] KOSPI_API downloaded={len(ohlcv)} selected={len(selected)}")
 
     if CFG.benchmark_tickers[0] not in ohlcv or CFG.benchmark_tickers[1] not in ohlcv:
         print("[WARN] KOSPI_API benchmark ETF data is missing from KIS.")
         return {
             "market": CFG.market,
-            "run_date": end_date,
+            "run_date": effective_end_date,
             "selected": selected,
             "scored": pd.DataFrame(),
             "candidates": pd.DataFrame(),
@@ -198,24 +274,33 @@ def run(end_date: str) -> dict:
     market_bullish = market_regime_is_bullish(primary)
 
     rows = []
+    skipped_short_history = 0
+    skipped_liquidity = 0
     for ticker in tickers:
         if ticker not in ohlcv:
             continue
         df = add_technical_features(ohlcv[ticker])
         if len(df) < 260:
+            skipped_short_history += 1
             continue
         last = df.iloc[-1]
         if last["close"] < CFG.min_price or last["adv20"] < CFG.min_adv20:
+            skipped_liquidity += 1
             continue
         row = latest_feature_row(ticker, names.get(ticker, ""), df, primary, secondary, CFG)
         if row:
             rows.append(row)
 
+    print(
+        "[INFO] KOSPI_API scoring "
+        f"rows={len(rows)} skipped_short_history={skipped_short_history} skipped_liquidity={skipped_liquidity}"
+    )
+
     scored = score_universe(pd.DataFrame(rows)) if rows else pd.DataFrame()
     candidates = build_candidates(scored, CFG, market_bullish) if not scored.empty else pd.DataFrame()
     return {
         "market": CFG.market,
-        "run_date": end_date,
+        "run_date": effective_end_date,
         "selected": selected,
         "scored": scored,
         "candidates": candidates,
