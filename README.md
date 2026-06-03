@@ -1,47 +1,46 @@
 # Stock Screener App
 
-NASDAQ, KOSDAQ, and KOSPI_API trend-following screener dashboard for Vercel.
+NASDAQ and KOSDAQ trend-following screener dashboard for Vercel.
 
 ## Architecture
-- GitHub Actions runs the Python screeners on demand.
+- GitHub Actions runs the Python screeners.
 - Supabase stores screening runs and results.
 - Vercel hosts the Next.js dashboard.
 
 ## Execution
-- NASDAQ, KOSDAQ, and KOSPI_API run on demand from the dashboard.
+- NASDAQ and KOSDAQ run on demand from the dashboard.
 - GitHub Actions workflows keep `workflow_dispatch` enabled and do not run on a daily schedule.
 
 ## Setup
 1. Create a Supabase project.
-2. Run `db/schema.sql` in the Supabase SQL editor for a fresh database.
-3. If your Supabase tables already exist, run `db/migrations/001_add_kospi_api_market.sql` in the Supabase SQL editor.
-4. Add these secrets to GitHub Actions:
+2. Run `db/setup_supabase.sql` in the Supabase SQL editor for a fresh database.
+   - If you prefer separate files, run `db/schema.sql` first, then any files in `db/migrations`.
+3. Add these secrets to GitHub Actions:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
-   - `KIS_APP_KEY`
-   - `KIS_APP_SECRET`
-   - `KIS_BASE_URL` (optional; defaults to Korea Investment production OpenAPI)
-5. Add these values to Vercel environment variables:
+4. Add the same values to Vercel environment variables.
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `GITHUB_ACTIONS_TOKEN`
    - `GITHUB_REPOSITORY` (defaults to `ddss8905-sudo/stocke`)
    - `GITHUB_DISPATCH_BRANCH` (defaults to `main`)
-6. Install web dependencies and run locally:
+   - `KIS_APP_KEY`
+   - `KIS_APP_SECRET`
+   - `KIS_BASE_URL` (defaults to Korea Investment production OpenAPI)
+5. Install web dependencies and run locally:
 
 ```powershell
 npm install
 npm run dev
 ```
 
-7. Test the Python jobs locally:
+6. Test the Python jobs locally:
 
 ```powershell
 cd jobs
 py -m pip install -r requirements.txt
 py run_market.py --market KOSDAQ
 py run_market.py --market NASDAQ
-py run_market.py --market KOSPI_API
 ```
 
 If Supabase environment variables are not set, the Python job writes a local JSON payload under `jobs/data`.
@@ -58,15 +57,28 @@ GITHUB_ACTIONS_TOKEN=...
 
 The button starts the workflow. Results appear after the workflow finishes and uploads new rows to Supabase.
 
-## KOSPI_API market
+## KOSPI API market
 `KOSPI_API` uses Korea Investment OpenAPI credentials from GitHub Actions secrets:
 
 ```text
-KIS_APP_KEY=...
-KIS_APP_SECRET=...
-KIS_BASE_URL=https://openapi.koreainvestment.com:9443
+KIS_APP_KEY
+KIS_APP_SECRET
+KIS_BASE_URL
 ```
 
-`KIS_BASE_URL` can be omitted for the production OpenAPI URL. Set it explicitly only when using a different Korea Investment endpoint.
+Before using `KOSPI_API`, run `db/migrations/001_add_kospi_api_market.sql` in Supabase SQL Editor so the existing market check constraints accept the new market value.
 
-The current implementation uses Korea Investment daily chart data and the existing trend-following scoring logic. To make intraday button clicks use the current quote as the latest price, add the Korea Investment current-price endpoint as a second step after the daily chart download.
+## Risk and regime filters
+The shared screener logic applies to `NASDAQ`, `KOSDAQ`, and `KOSPI_API`.
+
+- Market regime is scored from the primary benchmark, secondary benchmark, and universe breadth. New candidates require a minimum regime score.
+- Candidate risk uses a structure/ATR stop instead of only a fixed percent stop.
+- Entry triggers are split into breakout and pullback setups.
+- Overextended names are filtered by ATR percent, distance from the 50-day moving average, and pivot extension.
+
+Run `db/migrations/002_add_risk_regime_entry_columns.sql` in Supabase SQL Editor before uploading new runs that include these fields.
+
+## Exit tracking model
+Exit rules need position state, not just a daily screener row. A position tracker should store the entry price, initial stop, highest high since entry, current trailing stop, and latest action. Each daily run can then update that state with fresh OHLCV data.
+
+The shared Python module includes `evaluate_position_exit`, which returns `hold`, `trim_or_watch`, or `hard_exit` based on the initial stop, 2R trailing stop, 50-day moving average break, and market regime weakness. The next practical step is adding a `positions` table and a small job that calls this function for held tickers after the screener finishes.
