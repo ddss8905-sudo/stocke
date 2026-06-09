@@ -18,6 +18,36 @@ const sampleRows: Record<Market, ScreeningResult[]> = {
   ]
 };
 
+function sampleDashboardData(market: Market): DashboardData {
+  return {
+    market,
+    run: null,
+    candidates: sampleRows[market],
+    scored: sampleRows[market],
+    usingSampleData: true,
+  };
+}
+
+function errorDetails(error: unknown) {
+  if (error instanceof Error) {
+    const cause = error.cause instanceof Error
+      ? { name: error.cause.name, message: error.cause.message }
+      : error.cause;
+    return { name: error.name, message: error.message, cause };
+  }
+  return { message: String(error) };
+}
+
+function supabaseBaseUrl() {
+  if (!SUPABASE_URL) return null;
+  try {
+    return new URL(SUPABASE_URL).origin;
+  } catch (error) {
+    console.error("[supabase] invalid SUPABASE_URL", { error: errorDetails(error) });
+    return null;
+  }
+}
+
 function headers() {
   return {
     apikey: SUPABASE_KEY ?? "",
@@ -26,7 +56,12 @@ function headers() {
 }
 
 async function supabaseGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const baseUrl = supabaseBaseUrl();
+  if (!baseUrl || !SUPABASE_KEY) {
+    throw new Error("Supabase environment is not configured");
+  }
+
+  const response = await fetch(`${baseUrl}/rest/v1/${path}`, {
     headers: headers(),
     next: { revalidate: 300 },
   });
@@ -38,30 +73,34 @@ async function supabaseGet<T>(path: string): Promise<T> {
 
 export async function getDashboardData(market: Market): Promise<DashboardData> {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
-    return {
+    return sampleDashboardData(market);
+  }
+
+  try {
+    const runs = await supabaseGet<ScreeningRun[]>(
+      `screening_runs?market=eq.${market}&order=run_date.desc,created_at.desc&limit=1`
+    );
+    const run = runs[0] ?? null;
+    if (!run) {
+      return { market, run: null, candidates: [], scored: [], usingSampleData: false };
+    }
+
+    const base = `screening_results?run_id=eq.${run.id}`;
+    const candidates = await supabaseGet<ScreeningResult[]>(
+      `${base}&is_candidate=eq.true&order=entry_trigger.desc,final_score.desc&limit=50`
+    );
+    const scored = await supabaseGet<ScreeningResult[]>(
+      `${base}&order=final_score.desc&limit=200`
+    );
+
+    return { market, run, candidates, scored, usingSampleData: false };
+  } catch (error) {
+    console.error("[supabase] dashboard data fetch failed", {
       market,
-      run: null,
-      candidates: sampleRows[market],
-      scored: sampleRows[market],
-      usingSampleData: true,
-    };
+      region: process.env.VERCEL_REGION,
+      supabaseHost: supabaseBaseUrl(),
+      error: errorDetails(error),
+    });
+    return sampleDashboardData(market);
   }
-
-  const runs = await supabaseGet<ScreeningRun[]>(
-    `screening_runs?market=eq.${market}&order=run_date.desc,created_at.desc&limit=1`
-  );
-  const run = runs[0] ?? null;
-  if (!run) {
-    return { market, run: null, candidates: [], scored: [], usingSampleData: false };
-  }
-
-  const base = `screening_results?run_id=eq.${run.id}`;
-  const candidates = await supabaseGet<ScreeningResult[]>(
-    `${base}&is_candidate=eq.true&order=entry_trigger.desc,final_score.desc&limit=50`
-  );
-  const scored = await supabaseGet<ScreeningResult[]>(
-    `${base}&order=final_score.desc&limit=200`
-  );
-
-  return { market, run, candidates, scored, usingSampleData: false };
 }
