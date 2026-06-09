@@ -119,7 +119,7 @@ export default async function Page({ searchParams }: PageProps) {
 
       {data.usingSampleData && (
         <div className="notice">
-          Supabase environment variables are missing, so sample rows are shown. Connect Supabase to display live screening results.
+          Supabase data is unavailable, so sample rows are shown. Resume the Supabase project and verify Vercel environment variables to display live screening results.
         </div>
       )}
 
