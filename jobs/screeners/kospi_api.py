@@ -11,9 +11,9 @@ import requests
 from .common import (
     MarketConfig,
     add_technical_features,
+    build_market_regime,
     build_candidates,
     latest_feature_row,
-    market_regime_is_bullish,
     score_universe,
     start_date,
 )
@@ -38,8 +38,16 @@ CFG = MarketConfig(
     min_rs_rank=70.0,
     min_close_to_52w_high_ratio=0.80,
     entry_volume_multiplier=1.4,
+    pullback_volume_multiplier=1.0,
     fixed_stop_pct=0.10,
     max_risk_to_stop=0.10,
+    max_atr_pct=0.10,
+    max_close_to_ma50_ratio=1.35,
+    max_entry_extension_pct=0.05,
+    stop_atr_multiple=2.0,
+    structure_stop_atr_buffer=0.5,
+    trailing_atr_multiple=2.5,
+    min_market_regime_score=55.0,
     benchmark_tickers=["069500", "102110"],
 )
 
@@ -330,11 +338,12 @@ def run(end_date: str) -> dict:
             "scored": pd.DataFrame(),
             "candidates": pd.DataFrame(),
             "market_bullish": False,
+            "market_regime_score": 0.0,
+            "market_exposure": 0.0,
         }
 
     primary = add_technical_features(ohlcv[CFG.benchmark_tickers[0]])
     secondary = add_technical_features(ohlcv[CFG.benchmark_tickers[1]])
-    market_bullish = market_regime_is_bullish(primary)
 
     rows = []
     skipped_short_history = 0
@@ -360,12 +369,15 @@ def run(end_date: str) -> dict:
     )
 
     scored = score_universe(pd.DataFrame(rows)) if rows else pd.DataFrame()
-    candidates = build_candidates(scored, CFG, market_bullish) if not scored.empty else pd.DataFrame()
+    market_regime = build_market_regime(primary, secondary, scored)
+    candidates = build_candidates(scored, CFG, market_regime) if not scored.empty else pd.DataFrame()
     return {
         "market": CFG.market,
         "run_date": effective_end_date,
         "selected": selected,
         "scored": scored,
         "candidates": candidates,
-        "market_bullish": market_bullish,
+        "market_bullish": market_regime["market_bullish"],
+        "market_regime_score": market_regime["score"],
+        "market_exposure": market_regime["exposure"],
     }

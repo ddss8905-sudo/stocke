@@ -61,7 +61,7 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   min-width: 260px;
   padding: 4px;
 }
@@ -226,7 +226,7 @@ h2 {
 
 table {
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1120px;
   width: 100%;
 }
 
@@ -245,8 +245,7 @@ th {
   font-weight: 760;
 }
 
-th:first-child, td:first-child,
-th:nth-child(2), td:nth-child(2) {
+th:first-child, td:first-child {
   text-align: left;
 }
 
@@ -261,11 +260,37 @@ tr:last-child td {
 
 .nameCell {
   font-weight: 700;
+  text-align: left;
 }
 
 .strong {
   color: var(--accent-2);
   font-weight: 760;
+}
+
+.signalPill {
+  background: #eef1ec;
+  border: 1px solid #d8ded5;
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 760;
+  justify-content: center;
+  min-width: 88px;
+  padding: 5px 9px;
+}
+
+.signalPill.buy {
+  background: #e8f5ee;
+  border-color: #b8dec9;
+  color: var(--accent);
+}
+
+.signalPill.wait {
+  background: #fff4e8;
+  border-color: #efd2ad;
+  color: var(--warn);
 }
 
 .triggerDot {

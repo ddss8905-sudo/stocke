@@ -20,6 +20,45 @@ function number(value: number | null | undefined, digits = 1) {
   return Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
 }
 
+function percent(value: number | null | undefined, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return `${(Number(value) * 100).toLocaleString("ko-KR", { maximumFractionDigits: digits })}%`;
+}
+
+function setupLabel(value: string | null | undefined) {
+  if (value === "breakout") return "Breakout";
+  if (value === "pullback") return "Pullback";
+  if (value === "extended_watch") return "Extended";
+  return "Watch";
+}
+
+function signalLabel(value: string | null | undefined, triggered: boolean | null | undefined) {
+  if (value === "buy_breakout") return "Buy breakout";
+  if (value === "buy_pullback") return "Buy pullback";
+  if (value === "wait_extended") return "Wait";
+  if (value === "watch_setup") return "Watch";
+  return triggered ? "Buy" : "Watch";
+}
+
+function signalClass(value: string | null | undefined, triggered: boolean | null | undefined) {
+  if (value === "buy_breakout" || value === "buy_pullback" || triggered) return "signalPill buy";
+  if (value === "wait_extended") return "signalPill wait";
+  return "signalPill";
+}
+
+function priceRange(low: number | null | undefined, high: number | null | undefined) {
+  if (low === null || low === undefined || high === null || high === undefined) return "-";
+  return `${number(low, 0)}-${number(high, 0)}`;
+}
+
+function regimeLabel(score: number | null | undefined) {
+  if (score === null || score === undefined || Number.isNaN(Number(score))) return "-";
+  if (score >= 70) return "Bullish";
+  if (score >= 55) return "Constructive";
+  if (score >= 40) return "Cautious";
+  return "Defensive";
+}
+
 function dateTime(value: string | null | undefined) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("ko-KR", {
@@ -63,14 +102,20 @@ function ResultTable({ rows, compact = false }: { rows: ScreeningResult[]; compa
         <thead>
           <tr>
             <th>Ticker</th>
+            {!compact && <th>Signal</th>}
+            {!compact && <th>Setup</th>}
             <th>Name</th>
             <th>Close</th>
             <th>Final</th>
             <th>RS</th>
             <th>Trend</th>
-            <th>Breakout</th>
-            <th>ADV20</th>
+            {compact && <th>Breakout</th>}
+            {compact && <th>ADV20</th>}
+            {!compact && <th>Buy Zone</th>}
+            {!compact && <th>Risk</th>}
             {!compact && <th>Stop</th>}
+            {!compact && <th>2R</th>}
+            {!compact && <th>Size</th>}
           </tr>
         </thead>
         <tbody>
@@ -80,19 +125,31 @@ function ResultTable({ rows, compact = false }: { rows: ScreeningResult[]; compa
                 <span className={row.entry_trigger ? "triggerDot on" : "triggerDot"} />
                 {row.ticker}
               </td>
+              {!compact && (
+                <td title={row.entry_reason ?? undefined}>
+                  <span className={signalClass(row.entry_signal, row.entry_trigger)}>
+                    {signalLabel(row.entry_signal, row.entry_trigger)}
+                  </span>
+                </td>
+              )}
+              {!compact && <td>{setupLabel(row.entry_setup)}</td>}
               <td className="nameCell">{row.security_name ?? "-"}</td>
               <td>{number(row.close, 0)}</td>
               <td className="strong">{number(row.final_score, 1)}</td>
               <td>{number(row.rs_rank, 1)}</td>
               <td>{number(row.trend_score, 1)}</td>
-              <td>{number(row.breakout_score, 1)}</td>
-              <td>{number(row.adv20, 0)}</td>
-              {!compact && <td>{number(row.stop_price, 0)}</td>}
+              {compact && <td>{number(row.breakout_score, 1)}</td>}
+              {compact && <td>{number(row.adv20, 0)}</td>}
+              {!compact && <td>{priceRange(row.buy_zone_low, row.buy_zone_high)}</td>}
+              {!compact && <td>{percent(row.risk_to_stop, 1)}</td>}
+              {!compact && <td title={row.exit_plan ?? undefined}>{number(row.initial_stop_price ?? row.stop_price, 0)}</td>}
+              {!compact && <td>{number(row.two_r_price, 0)}</td>}
+              {!compact && <td>{percent(row.position_size_pct, 1)}</td>}
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
-              <td className="empty" colSpan={compact ? 8 : 9}>No results to display.</td>
+              <td className="empty" colSpan={compact ? 8 : 13}>No results to display.</td>
             </tr>
           )}
         </tbody>
@@ -106,6 +163,10 @@ export default async function Page({ searchParams }: PageProps) {
   const market = asMarket(params?.market);
   const data = await getDashboardData(market);
   const latestRun = dateTime(data.run?.finished_at) || data.run?.run_date || "-";
+  const regimeValue = data.run
+    ? `${regimeLabel(data.run.market_regime_score)} ${number(data.run.market_regime_score, 0)}`
+    : "-";
+  const regimeTradable = Number(data.run?.market_regime_score ?? 0) >= 55;
 
   return (
     <main>
@@ -130,8 +191,8 @@ export default async function Page({ searchParams }: PageProps) {
         <Stat label="Candidates" value={String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
         <Stat
           label="Regime"
-          value={data.run ? (data.run.market_bullish ? "Bullish" : "Defensive") : "-"}
-          icon={data.run?.market_bullish ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
+          value={regimeValue}
+          icon={regimeTradable ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
         />
       </section>
 
@@ -149,7 +210,7 @@ export default async function Page({ searchParams }: PageProps) {
         <div className="sectionHead">
           <div>
             <h2>Candidate List</h2>
-            <p>Stocks that passed score, relative strength, liquidity, high proximity, and stop-risk filters.</p>
+            <p>Trend-template candidates with buy zone, stop, 2R, and risk-sized position guidance.</p>
           </div>
         </div>
         <ResultTable rows={data.candidates} />

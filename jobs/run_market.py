@@ -19,6 +19,27 @@ RUNNERS = {
     "KOSPI_API": kospi_api.run,
 }
 
+CANDIDATE_ONLY_FIELDS = [
+    "market_regime_score",
+    "market_exposure",
+    "entry_pivot",
+    "buy_zone_low",
+    "buy_zone_high",
+    "entry_extension_pct",
+    "breakout_entry",
+    "pullback_entry",
+    "entry_setup",
+    "entry_signal",
+    "entry_reason",
+    "stop_basis",
+    "initial_stop_price",
+    "sell_watch_price",
+    "trend_exit_price",
+    "two_r_price",
+    "position_size_pct",
+    "exit_plan",
+]
+
 
 def records(df: pd.DataFrame) -> list:
     if df.empty:
@@ -78,6 +99,8 @@ def upload_to_supabase(payload: Dict[str, Any]) -> None:
         "run_date": payload["run_date"],
         "status": "completed",
         "market_bullish": payload["market_bullish"],
+        "market_regime_score": payload.get("market_regime_score"),
+        "market_exposure": payload.get("market_exposure"),
         "selected_count": len(payload["selected"]),
         "scored_count": len(payload["scored"]),
         "candidate_count": len(payload["candidates"]),
@@ -99,6 +122,8 @@ def upload_to_supabase(payload: Dict[str, Any]) -> None:
         row["entry_trigger"] = bool(candidate.get("entry_trigger")) if candidate else False
         row["stop_price"] = candidate.get("stop_price") if candidate else None
         row["risk_to_stop"] = candidate.get("risk_to_stop") if candidate else None
+        for field in CANDIDATE_ONLY_FIELDS:
+            row[field] = candidate.get(field) if candidate else None
         result_rows.append(sanitize_record(row))
 
     if result_rows:
@@ -121,6 +146,8 @@ def main() -> None:
         "market": result["market"],
         "run_date": result["run_date"],
         "market_bullish": result["market_bullish"],
+        "market_regime_score": result.get("market_regime_score"),
+        "market_exposure": result.get("market_exposure"),
         "selected": records(result["selected"]),
         "scored": records(result["scored"]),
         "candidates": records(result["candidates"]),
