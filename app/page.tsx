@@ -53,10 +53,9 @@ function priceRange(low: number | null | undefined, high: number | null | undefi
 
 function regimeLabel(score: number | null | undefined) {
   if (score === null || score === undefined || Number.isNaN(Number(score))) return "-";
-  if (score >= 70) return "Bullish";
-  if (score >= 55) return "Constructive";
-  if (score >= 40) return "Cautious";
-  return "Defensive";
+  if (score >= 80) return "Bullish · 80% max";
+  if (score >= 40) return "Reduced · 40% max";
+  return "Risk off · 0%";
 }
 
 function dateTime(value: string | null | undefined) {
@@ -166,7 +165,7 @@ export default async function Page({ searchParams }: PageProps) {
   const regimeValue = data.run
     ? `${regimeLabel(data.run.market_regime_score)} ${number(data.run.market_regime_score, 0)}`
     : "-";
-  const regimeTradable = Number(data.run?.market_regime_score ?? 0) >= 55;
+  const regimeTradable = Number(data.run?.market_exposure ?? 0) > 0;
 
   return (
     <main>
@@ -228,3 +227,4 @@ export default async function Page({ searchParams }: PageProps) {
     </main>
   );
 }
+

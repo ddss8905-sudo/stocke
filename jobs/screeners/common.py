@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -28,20 +28,9 @@ class MarketConfig:
     trailing_atr_multiple: float
     min_market_regime_score: float
     benchmark_tickers: List[str]
-
-
-WEIGHTS: Dict[str, float] = {
-    "trend": 0.17,
-    "rs": 0.18,
-    "momentum": 0.12,
-    "breakout": 0.13,
-    "accumulation": 0.08,
-    "vcp": 0.09,
-    "trend_template": 0.12,
-    "setup_quality": 0.07,
-    "fundamental_proxy": 0.01,
-    "risk_liquidity": 0.03,
-}
+    risk_per_trade: float = 0.005
+    max_position_pct: float = 0.10
+    max_positions: int = 10
 
 
 def start_date(end_date: str, lookback_days: int) -> str:
@@ -94,6 +83,9 @@ def add_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     x["ret_3m"] = x["close"] / x["close"].shift(63).replace(0, np.nan) - 1
     x["ret_6m"] = x["close"] / x["close"].shift(126).replace(0, np.nan) - 1
     x["ret_12m"] = x["close"] / x["close"].shift(252).replace(0, np.nan) - 1
+    x["ret_3m_skip_1m"] = x["close"].shift(21) / x["close"].shift(63).replace(0, np.nan) - 1
+    x["ret_6m_skip_1m"] = x["close"].shift(21) / x["close"].shift(126).replace(0, np.nan) - 1
+    x["ret_12m_skip_1m"] = x["close"].shift(21) / x["close"].shift(252).replace(0, np.nan) - 1
 
     x["range10"] = (x["high"].rolling(10).max() - x["low"].rolling(10).min()) / close_for_ratio
     x["range20"] = (x["high"].rolling(20).max() - x["low"].rolling(20).min()) / close_for_ratio
@@ -120,34 +112,20 @@ def build_market_regime(primary: pd.DataFrame, secondary: Optional[pd.DataFrame]
         return {"score": 0.0, "exposure": 0.0, "market_bullish": False, "breadth_above_ma50": None, "breadth_above_ma200": None}
 
     last = x.iloc[-1]
-    score = 0.0
-    score += 20.0 * bool(last["close"] > last["ma200"])
-    score += 15.0 * bool(last["ma50"] > last["ma200"])
-    score += 15.0 * bool(last["close"] > last["ma50"])
-    score += 10.0 * bool(len(x) >= 22 and last["close"] > x["close"].iloc[-22])
-
-    if secondary is not None and len(secondary) >= 200:
-        y = secondary.copy()
-        if "ma50" not in y.columns or "ma200" not in y.columns:
-            y["ma50"] = y["close"].rolling(50).mean()
-            y["ma200"] = y["close"].rolling(200).mean()
-        secondary_last = y.iloc[-1]
-        score += 10.0 * bool(secondary_last["close"] > secondary_last["ma200"])
-        score += 5.0 * bool(secondary_last["close"] > secondary_last["ma50"])
+    above_ma200 = bool(last["close"] > last["ma200"])
+    strong_trend = above_ma200 and bool(last["ma50"] > last["ma200"])
+    exposure = 0.8 if strong_trend else 0.4 if above_ma200 else 0.0
+    score = exposure * 100.0
 
     breadth_above_ma50 = None
     breadth_above_ma200 = None
     if scored is not None and not scored.empty and {"close", "ma50", "ma200"}.issubset(scored.columns):
         breadth_above_ma50 = float((scored["close"] > scored["ma50"]).mean())
         breadth_above_ma200 = float((scored["close"] > scored["ma200"]).mean())
-        score += 7.5 * min(max(breadth_above_ma50 / 0.60, 0.0), 1.0)
-        score += 7.5 * min(max(breadth_above_ma200 / 0.55, 0.0), 1.0)
-
-    exposure = 1.0 if score >= 70.0 else 0.5 if score >= 55.0 else 0.25 if score >= 40.0 else 0.0
     return {
         "score": round(float(score), 2),
         "exposure": exposure,
-        "market_bullish": score >= 70.0,
+        "market_bullish": exposure >= 0.8,
         "breadth_above_ma50": breadth_above_ma50,
         "breadth_above_ma200": breadth_above_ma200,
     }
@@ -162,27 +140,25 @@ def latest_feature_row(ticker: str, name: str, df: pd.DataFrame, primary_benchma
     high20_prev = df["high20"].shift(1).iloc[-1]
     high50_prev = df["high50"].shift(1).iloc[-1]
     high55_prev = df["high55"].shift(1).iloc[-1]
+    high55_before_prev = df["high55"].shift(1).iloc[-2]
     low20_prev = df["low20"].shift(1).iloc[-1]
     low50_prev = df["low50"].shift(1).iloc[-1]
     ma200_1m_ago = df["ma200"].iloc[-21]
-    volume_ma10 = df["volume"].rolling(10).mean().iloc[-1]
+    volume_ma10 = df["volume"].shift(1).rolling(10).mean().iloc[-1]
+    volume_ma50_prev = df["volume"].shift(1).rolling(50).mean().iloc[-1]
     atr_mean50 = df["atr_pct"].rolling(50).mean().iloc[-1]
     close_to_52w_high_ratio = safe_ratio(last["close"], last["high252"])
     close_to_52w_low_ratio = safe_ratio(last["close"], last["low252"])
     close_to_ma50_ratio = safe_ratio(last["close"], last["ma50"])
     base_depth_pct = safe_ratio(last["high50"] - last["low50"], last["high50"])
-    volume_dry_up_ratio = safe_ratio(volume_ma10, last["vol_ma50"])
+    volume_dry_up_ratio = safe_ratio(volume_ma10, volume_ma50_prev)
     donchian20_breakout = bool(last["close"] > high20_prev)
     donchian55_breakout = bool(last["close"] > high55_prev)
     trend_template_checks = [
-        last["close"] > last["ma50"],
-        last["close"] > last["ma150"],
         last["close"] > last["ma200"],
-        last["ma50"] > last["ma150"],
-        last["ma150"] > last["ma200"],
+        last["ma50"] > last["ma200"],
         last["ma200"] > ma200_1m_ago,
-        close_to_52w_low_ratio >= 1.30,
-        close_to_52w_high_ratio >= cfg.min_close_to_52w_high_ratio,
+        last["ret_6m_skip_1m"] > 0,
     ]
     trend_template_raw = sum(int(bool(check)) for check in trend_template_checks)
     trend_template_pass = trend_template_raw == len(trend_template_checks)
@@ -194,16 +170,11 @@ def latest_feature_row(ticker: str, name: str, df: pd.DataFrame, primary_benchma
         2 * (last["close"] > last["ma20"])
     )
 
-    stock_6m = df["ret_6m"].iloc[-1]
-    primary_6m = safe_ratio(primary_benchmark["close"].iloc[-1], primary_benchmark["close"].iloc[-126]) - 1
-    secondary_6m = safe_ratio(secondary_benchmark["close"].iloc[-1], secondary_benchmark["close"].iloc[-126]) - 1
-    rs_raw = 0.5 * (stock_6m - primary_6m) + 0.5 * (stock_6m - secondary_6m)
-
-    momentum_raw = 0.15 * last["ret_1m"] + 0.25 * last["ret_3m"] + 0.30 * last["ret_6m"] + 0.30 * last["ret_12m"]
-    if last["ret_1m"] > 0.5:
-        momentum_raw *= 0.75
-    if close_to_ma50_ratio > cfg.max_close_to_ma50_ratio:
-        momentum_raw *= 0.70
+    momentum_3m = float(last["ret_3m_skip_1m"])
+    momentum_6m = float(last["ret_6m_skip_1m"])
+    momentum_12m = float(last["ret_12m_skip_1m"])
+    momentum_raw = 0.20 * momentum_3m + 0.30 * momentum_6m + 0.50 * momentum_12m
+    rs_raw = momentum_raw
 
     breakout_raw = (
         4 * (last["close"] >= last["high20"] * 0.97) + 4 * (last["close"] >= last["high50"] * 0.95) +
@@ -215,10 +186,15 @@ def latest_feature_row(ticker: str, name: str, df: pd.DataFrame, primary_benchma
         3 * (last["up_volume_days_20"] >= 3) + 3 * (last["up_volume_days_20"] > last["down_volume_days_20"]) +
         2 * (last["adv20"] > cfg.min_adv20) + 2 * (last["close"] > last["ma20"])
     )
+    recent_atr = df["atr_pct"].iloc[-10:].mean()
+    prior_atr = df["atr_pct"].iloc[-20:-10].mean()
+    older_atr = df["atr_pct"].iloc[-50:-20].mean()
+    recent_volume = df["volume"].iloc[-10:].mean()
+    prior_volume = df["volume"].iloc[-20:-10].mean()
     vcp_raw = (
-        3 * (last["range10"] < last["range20"]) + 3 * (last["range20"] < last["range50"]) +
-        2 * (last["atr_pct"] < df["atr_pct"].rolling(50).mean().iloc[-1]) +
-        2 * (df["volume"].rolling(10).mean().iloc[-1] < df["volume"].rolling(50).mean().iloc[-1])
+        4 * (recent_atr < prior_atr) +
+        3 * (prior_atr < older_atr) +
+        3 * (recent_volume < prior_volume)
     )
     setup_quality_raw = (
         3 * trend_template_pass +
@@ -245,7 +221,7 @@ def latest_feature_row(ticker: str, name: str, df: pd.DataFrame, primary_benchma
         "high55_prev": float(high55_prev),
         "low20_prev": float(low20_prev),
         "low50_prev": float(low50_prev),
-        "vol_ma50": float(last["vol_ma50"]),
+        "vol_ma50": float(volume_ma50_prev),
         "volume": float(last["volume"]),
         "ma20": float(last["ma20"]),
         "ma50": float(last["ma50"]),
@@ -261,6 +237,10 @@ def latest_feature_row(ticker: str, name: str, df: pd.DataFrame, primary_benchma
         "trend_template_pass": bool(trend_template_pass),
         "donchian20_breakout": bool(donchian20_breakout),
         "donchian55_breakout": bool(donchian55_breakout),
+        "_prior_donchian55_breakout": bool(prev["close"] > high55_before_prev),
+        "_momentum_3m_skip_1m": momentum_3m,
+        "_momentum_6m_skip_1m": momentum_6m,
+        "_momentum_12m_skip_1m": momentum_12m,
         "trend_raw": float(trend_raw),
         "rs_raw": float(rs_raw),
         "momentum_raw": float(momentum_raw),
@@ -286,19 +266,15 @@ def score_universe(features_df: pd.DataFrame) -> pd.DataFrame:
             df[col] = 0.0
         df[col.replace("_raw", "_score")] = pct_rank(df[col])
 
-    df["final_score"] = (
-        df["trend_score"] * WEIGHTS["trend"] +
-        df["rs_score"] * WEIGHTS["rs"] +
-        df["momentum_score"] * WEIGHTS["momentum"] +
-        df["breakout_score"] * WEIGHTS["breakout"] +
-        df["accumulation_score"] * WEIGHTS["accumulation"] +
-        df["vcp_score"] * WEIGHTS["vcp"] +
-        df["trend_template_score"] * WEIGHTS["trend_template"] +
-        df["setup_quality_score"] * WEIGHTS["setup_quality"] +
-        df["fundamental_proxy_score"] * WEIGHTS["fundamental_proxy"] +
-        df["risk_liquidity_score"] * WEIGHTS["risk_liquidity"]
-    )
-    df["rs_rank"] = df["rs_score"]
+    momentum_3m_score = pct_rank(df["_momentum_3m_skip_1m"])
+    momentum_6m_score = pct_rank(df["_momentum_6m_skip_1m"])
+    momentum_12m_score = pct_rank(df["_momentum_12m_skip_1m"])
+    leadership_score = 0.20 * momentum_3m_score + 0.30 * momentum_6m_score + 0.50 * momentum_12m_score
+
+    df["final_score"] = leadership_score
+    df["rs_score"] = leadership_score
+    df["momentum_score"] = leadership_score
+    df["rs_rank"] = leadership_score
     return df.sort_values("final_score", ascending=False).reset_index(drop=True)
 
 
@@ -306,7 +282,7 @@ def build_candidates(scored: pd.DataFrame, cfg: MarketConfig, market_regime: obj
     regime = (
         market_regime
         if isinstance(market_regime, dict)
-        else {"score": 100.0 if market_regime else 0.0, "exposure": 1.0 if market_regime else 0.0}
+        else {"score": 80.0 if market_regime else 0.0, "exposure": 0.8 if market_regime else 0.0}
     )
     regime_score = float(regime.get("score") or 0.0)
     regime_exposure = float(regime.get("exposure") or 0.0)
@@ -319,10 +295,8 @@ def build_candidates(scored: pd.DataFrame, cfg: MarketConfig, market_regime: obj
 
     cond = (
         (x["final_score"] >= cfg.min_final_score) &
-        (x["close"] > x["ma50"]) &
         (x["close"] > x["ma200"]) &
         (x["trend_template_pass"]) &
-        (x["close_to_52w_high_ratio"] >= cfg.min_close_to_52w_high_ratio) &
         (x["close_to_ma50_ratio"] <= cfg.max_close_to_ma50_ratio) &
         (x["base_depth_pct"].isna() | (x["base_depth_pct"] <= 0.45)) &
         (x["rs_rank"] >= cfg.min_rs_rank) &
@@ -334,24 +308,23 @@ def build_candidates(scored: pd.DataFrame, cfg: MarketConfig, market_regime: obj
     candidates = x[cond].copy()
     candidates["market_regime_score"] = regime_score
     candidates["market_exposure"] = regime_exposure
-    candidates["entry_pivot"] = candidates["high50_prev"]
+    candidates["entry_pivot"] = candidates["high55_prev"]
     candidates["buy_zone_low"] = candidates["entry_pivot"]
     candidates["buy_zone_high"] = candidates["entry_pivot"] * (1 + cfg.max_entry_extension_pct)
     candidates["entry_extension_pct"] = (candidates["close"] - candidates["entry_pivot"]) / candidates["entry_pivot"]
-    donchian_breakout = candidates.get("donchian20_breakout", False) | candidates.get("donchian55_breakout", False)
     candidates["breakout_entry"] = (
         (candidates["entry_extension_pct"] >= 0) &
         (candidates["entry_extension_pct"] <= cfg.max_entry_extension_pct) &
-        (donchian_breakout | (candidates["close"] >= candidates["entry_pivot"])) &
+        (candidates["donchian55_breakout"]) &
+        (~candidates["_prior_donchian55_breakout"]) &
         (candidates["volume"] > candidates["vol_ma50"] * cfg.entry_volume_multiplier)
     )
-    candidates["pullback_entry"] = (
-        (candidates["close"] > candidates["ma20"]) &
-        (candidates["low"] <= candidates["ma20"] * 1.02) &
-        (candidates["close"] > candidates["close_prev"]) &
-        (candidates["volume"] > candidates["vol_ma50"] * cfg.pullback_volume_multiplier)
-    )
-    candidates["entry_trigger"] = candidates["breakout_entry"] | candidates["pullback_entry"]
+    candidates["pullback_entry"] = False
+    candidates["entry_trigger"] = False
+    signal_indices = candidates[candidates["breakout_entry"]].sort_values(
+        "final_score", ascending=False
+    ).head(cfg.max_positions).index
+    candidates.loc[signal_indices, "entry_trigger"] = True
     candidates["extended_watch"] = candidates["entry_extension_pct"] > cfg.max_entry_extension_pct
     candidates["entry_setup"] = np.select(
         [candidates["breakout_entry"], candidates["pullback_entry"], candidates["extended_watch"]],
@@ -370,16 +343,12 @@ def build_candidates(scored: pd.DataFrame, cfg: MarketConfig, market_regime: obj
             "Pullback reclaimed short-term support while trend template is intact.",
             "Trend is strong but price is extended beyond the planned buy zone.",
         ],
-        default="Trend template passed; wait for breakout volume or a controlled pullback.",
+        default="Leadership filter passed; wait for a new 55-day breakout with volume.",
     )
 
-    breakout_stop = candidates["entry_pivot"] - candidates["atr14"] * cfg.structure_stop_atr_buffer
-    pullback_support = pd.concat([candidates["ma20"], candidates["low20_prev"]], axis=1).max(axis=1)
-    pullback_stop = pullback_support - candidates["atr14"] * cfg.structure_stop_atr_buffer
-    structure_stop = breakout_stop.where(candidates["breakout_entry"], pullback_stop)
     volatility_stop = candidates["close"] - candidates["atr14"] * cfg.stop_atr_multiple
-    candidates["stop_price"] = pd.concat([structure_stop, volatility_stop], axis=1).max(axis=1)
-    candidates["stop_basis"] = np.where(candidates["breakout_entry"], "breakout_pivot_atr", "support_atr")
+    candidates["stop_price"] = volatility_stop
+    candidates["stop_basis"] = "atr_2_5x"
     fallback_stop = candidates["close"] * (1 - cfg.fixed_stop_pct)
     invalid_stop = candidates["stop_price"].isna() | (candidates["stop_price"] <= 0) | (candidates["stop_price"] >= candidates["close"])
     candidates.loc[invalid_stop, "stop_price"] = fallback_stop[invalid_stop]
@@ -391,42 +360,55 @@ def build_candidates(scored: pd.DataFrame, cfg: MarketConfig, market_regime: obj
     candidates["trend_exit_price"] = candidates["ma50"]
     candidates["two_r_price"] = candidates["close"] + 2 * (candidates["close"] - candidates["stop_price"])
     risk_nonzero = candidates["risk_to_stop"].replace(0, np.nan)
-    candidates["position_size_pct"] = (0.005 / risk_nonzero).clip(upper=0.25)
+    candidates["position_size_pct"] = (cfg.risk_per_trade / risk_nonzero).clip(upper=cfg.max_position_pct)
     candidates["exit_plan"] = candidates.apply(
         lambda row: (
-            f"Hard stop {row['initial_stop_price']:.2f}; trim/watch below MA20 "
-            f"{row['sell_watch_price']:.2f}; exit on MA50 break {row['trend_exit_price']:.2f}; "
-            f"after 2R {row['two_r_price']:.2f}, trail with ATR/MA50."
+            f"Initial stop {row['initial_stop_price']:.2f}; exit after an MA50 close break; "
+            f"after 2R {row['two_r_price']:.2f}, activate a non-decreasing 3 ATR close trail."
         ),
         axis=1,
     )
     return candidates.sort_values(["entry_trigger", "final_score"], ascending=[False, False])
 
 
-def evaluate_position_exit(df: pd.DataFrame, entry_price: float, initial_stop_price: float, highest_high: float, cfg: MarketConfig, market_regime: Optional[dict] = None) -> dict:
+def evaluate_position_exit(
+    df: pd.DataFrame,
+    entry_price: float,
+    initial_stop_price: float,
+    highest_high: float,
+    cfg: MarketConfig,
+    market_regime: Optional[dict] = None,
+    previous_stop_price: Optional[float] = None,
+    trail_activated: bool = False,
+) -> dict:
     x = add_technical_features(df)
     if len(x) < 50:
         return {"exit_action": "insufficient_data"}
 
     last = x.iloc[-1]
-    current_highest_high = max(float(highest_high or 0), float(x["high"].max()))
+    current_highest_close = max(float(highest_high or 0), float(x["close"].max()))
     initial_risk = max(float(entry_price) - float(initial_stop_price), 0.0)
     r_multiple = ((float(last["close"]) - float(entry_price)) / initial_risk) if initial_risk > 0 else 0.0
-    atr_trailing_stop = current_highest_high - float(last["atr14"]) * cfg.trailing_atr_multiple
-    ma_trailing_stop = float(last["ma50"]) - float(last["atr14"]) * cfg.structure_stop_atr_buffer
-    trailing_stop = max(float(initial_stop_price), atr_trailing_stop if r_multiple >= 2.0 else float(initial_stop_price), ma_trailing_stop if r_multiple >= 2.0 else float(initial_stop_price))
+    highest_r_multiple = ((current_highest_close - float(entry_price)) / initial_risk) if initial_risk > 0 else 0.0
+    trail_activated = bool(trail_activated or highest_r_multiple >= 2.0)
+    previous_stop = float(previous_stop_price or initial_stop_price)
+    atr_trailing_stop = current_highest_close - float(last["atr14"]) * cfg.trailing_atr_multiple
+    trailing_stop = max(float(initial_stop_price), previous_stop, atr_trailing_stop if trail_activated else float(initial_stop_price))
 
     regime_exposure = float((market_regime or {}).get("exposure", 1.0))
     if float(last["close"]) <= float(initial_stop_price):
         action = "hard_exit"
         reason = "initial_stop"
-    elif r_multiple >= 2.0 and float(last["close"]) <= trailing_stop:
+    elif trail_activated and float(last["close"]) <= trailing_stop:
         action = "hard_exit"
         reason = "trailing_stop"
     elif float(last["close"]) < float(last["ma50"]):
         action = "hard_exit"
         reason = "ma50_break"
-    elif float(last["close"]) < float(last["ma20"]) or regime_exposure < 0.5:
+    elif regime_exposure <= 0.0:
+        action = "hard_exit"
+        reason = "market_risk_off"
+    elif float(last["close"]) < float(last["ma20"]) or regime_exposure < 0.8:
         action = "trim_or_watch"
         reason = "ma20_or_regime_weakness"
     else:
@@ -437,8 +419,10 @@ def evaluate_position_exit(df: pd.DataFrame, entry_price: float, initial_stop_pr
         "exit_action": action,
         "exit_reason": reason,
         "last_close": float(last["close"]),
-        "highest_high": current_highest_high,
+        "highest_high": current_highest_close,
         "initial_stop_price": float(initial_stop_price),
         "trailing_stop_price": float(trailing_stop),
+        "trail_activated": trail_activated,
         "r_multiple": float(r_multiple),
     }
+

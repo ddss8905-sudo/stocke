@@ -6,6 +6,7 @@ from urllib.request import urlopen
 
 import pandas as pd
 import requests
+import yfinance as yf
 
 from .common import (
     MarketConfig,
@@ -25,23 +26,23 @@ OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 CFG = MarketConfig(
     market="NASDAQ",
     lookback_days=420,
-    universe_size=200,
+    universe_size=500,
     min_price=10.0,
     min_adv20=20_000_000.0,
-    min_final_score=75.0,
+    min_final_score=80.0,
     min_rs_rank=80.0,
     min_close_to_52w_high_ratio=0.85,
     entry_volume_multiplier=1.5,
     pullback_volume_multiplier=1.0,
     fixed_stop_pct=0.08,
-    max_risk_to_stop=0.08,
+    max_risk_to_stop=0.10,
     max_atr_pct=0.12,
     max_close_to_ma50_ratio=1.35,
     max_entry_extension_pct=0.05,
-    stop_atr_multiple=2.0,
+    stop_atr_multiple=2.5,
     structure_stop_atr_buffer=0.5,
-    trailing_atr_multiple=2.5,
-    min_market_regime_score=55.0,
+    trailing_atr_multiple=3.0,
+    min_market_regime_score=40.0,
     benchmark_tickers=["QQQ", "SPY"],
 )
 
@@ -49,20 +50,7 @@ CFG = MarketConfig(
 EXCLUDE_NAME_KEYWORDS = [
     "Warrant", "Warrants", "Right", "Rights", "Unit", "Units",
     "Preferred", "Depositary Shares", "Notes", "Note", "Bond",
-    "Debenture", "Fund", "Trust Preferred",
-]
-
-
-BASE_TICKERS = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO", "TSLA", "COST",
-    "NFLX", "ADBE", "AMD", "INTC", "QCOM", "TXN", "AMAT", "MU", "PANW", "CRWD",
-    "PLTR", "ASML", "LRCX", "KLAC", "ADP", "INTU", "CSCO", "PEP", "SBUX", "BKNG",
-    "MELI", "MRVL", "SNPS", "CDNS", "MDB", "TEAM", "ZS", "DDOG", "SHOP", "ABNB",
-    "ARM", "SMCI", "PYPL", "GILD", "REGN", "VRTX", "BIIB", "MRNA", "DXCM", "IDXX",
-    "ADI", "APP", "AZN", "BKR", "CCEP", "CEG", "CHTR", "DASH", "EA", "EXC",
-    "FANG", "FTNT", "GEHC", "HON", "KDP", "LIN", "MAR", "MDLZ", "MNST", "NXPI",
-    "ORLY", "PCAR", "ROP", "ROST", "TTWO", "WDAY", "XEL", "MSTR", "RKLB", "SOUN",
-    "WDC", "STX", "MTSI", "SITM", "LSCC", "AEHR", "MXL", "AXTI",
+    "Debenture", "Fund", "Trust Preferred", "Acquisition Corp", "Blank Check",
 ]
 
 
@@ -88,11 +76,33 @@ def fetch_universe() -> pd.DataFrame:
 
 def download_ohlcv(tickers: List[str], start: str, end: str) -> Dict[str, pd.DataFrame]:
     result: Dict[str, pd.DataFrame] = {}
-    for ticker in tickers:
-        df = download_yahoo_chart(ticker, start, end)
-        if df.empty:
+    symbols = list(dict.fromkeys(tickers))
+    if not symbols:
+        return result
+    try:
+        raw = yf.download(
+            symbols,
+            start=start,
+            end=(date.fromisoformat(end) + timedelta(days=1)).isoformat(),
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+            group_by="ticker",
+        )
+    except Exception as exc:
+        print(f"[WARN] failed to bulk download NASDAQ data: {exc}")
+        return result
+
+    for ticker in symbols:
+        try:
+            frame = raw[ticker] if isinstance(raw.columns, pd.MultiIndex) else raw
+            frame = frame.rename(columns=str.lower)
+            df = frame[["open", "high", "low", "close", "volume"]].dropna()
+            df.index = pd.to_datetime(df.index).date
+            if not df.empty:
+                result[ticker] = df
+        except (KeyError, TypeError):
             continue
-        result[ticker] = df
     return result
 
 
@@ -151,12 +161,11 @@ def download_in_chunks(tickers: List[str], start: str, end: str, chunk_size: int
 
 
 def select_top_by_adv(end_date: str) -> pd.DataFrame:
-    listed = fetch_universe()
-    listed_names = listed.set_index("ticker")["security_name"].to_dict()
-    base_rows = [{"ticker": ticker, "security_name": listed_names.get(ticker, ticker)} for ticker in BASE_TICKERS]
-    universe = pd.DataFrame(base_rows, columns=["ticker", "security_name"]).drop_duplicates("ticker")
+    universe = fetch_universe()
+    if universe.empty:
+        raise RuntimeError("NASDAQ official listing returned no common-stock symbols.")
     start = (date.fromisoformat(end_date) - timedelta(days=45)).isoformat()
-    recent = download_in_chunks(universe["ticker"].tolist(), start, end_date, chunk_size=50)
+    recent = download_in_chunks(universe["ticker"].tolist(), start, end_date, chunk_size=200)
     names = universe.set_index("ticker")["security_name"].to_dict()
 
     rows = []
@@ -184,7 +193,7 @@ def run(end_date: str) -> dict:
     names = selected.set_index("ticker")["security_name"].to_dict()
     all_tickers = sorted(set(tickers + CFG.benchmark_tickers))
 
-    ohlcv = download_ohlcv(all_tickers, start_date(end_date, CFG.lookback_days), end_date)
+    ohlcv = download_in_chunks(all_tickers, start_date(end_date, CFG.lookback_days), end_date, chunk_size=200)
     if CFG.benchmark_tickers[0] not in ohlcv or CFG.benchmark_tickers[1] not in ohlcv:
         raise RuntimeError("NASDAQ benchmark data is missing. Please retry later.")
     primary = add_technical_features(ohlcv[CFG.benchmark_tickers[0]])
@@ -217,3 +226,4 @@ def run(end_date: str) -> dict:
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],
     }
+

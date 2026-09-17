@@ -63,7 +63,11 @@ def sanitize_value(value: Any) -> Any:
 
 
 def sanitize_record(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: sanitize_value(value) for key, value in row.items()}
+    return {
+        key: sanitize_value(value)
+        for key, value in row.items()
+        if not key.startswith("_")
+    }
 
 
 def write_local_payload(payload: Dict[str, Any], output_dir: Path) -> Path:
@@ -167,3 +171,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

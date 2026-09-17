@@ -133,8 +133,8 @@ CFG = MarketConfig(
     universe_size=200,
     min_price=1_000.0,
     min_adv20=2_000_000_000.0,
-    min_final_score=70.0,
-    min_rs_rank=70.0,
+    min_final_score=80.0,
+    min_rs_rank=80.0,
     min_close_to_52w_high_ratio=0.80,
     entry_volume_multiplier=1.4,
     pullback_volume_multiplier=1.0,
@@ -143,10 +143,10 @@ CFG = MarketConfig(
     max_atr_pct=0.12,
     max_close_to_ma50_ratio=1.35,
     max_entry_extension_pct=0.05,
-    stop_atr_multiple=2.0,
+    stop_atr_multiple=2.5,
     structure_stop_atr_buffer=0.5,
-    trailing_atr_multiple=2.5,
-    min_market_regime_score=55.0,
+    trailing_atr_multiple=3.0,
+    min_market_regime_score=40.0,
     benchmark_tickers=["229200", "232080"],
 )
 
@@ -344,3 +344,4 @@ def run(end_date: str) -> dict:
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],
     }
+
