@@ -71,7 +71,7 @@ Before using `KOSPI_API`, run `db/migrations/001_add_kospi_api_market.sql` in Su
 ## Risk and regime filters
 The shared screener logic applies to `NASDAQ`, `KOSDAQ`, and `KOSPI_API`.
 
-- NASDAQ selection scans the official listing and keeps the top 500 names by 20-day average dollar volume.
+- NASDAQ selection intersects the official listing with the official current-liquidity feed, prefilters the top 1,000 names, and keeps the top 500 by 20-day average dollar volume.
 - Leadership score uses cross-sectional percentile ranks of 3-, 6-, and 12-month returns ending one month ago, weighted 20%, 30%, and 50%.
 - Market exposure is capped at 80% when the benchmark is above its 200-day average and its 50-day average is above the 200-day average, 40% when only the first condition passes, and 0% otherwise.
 - A buy signal requires a new 55-day closing breakout with volume above the prior 50-day average. Pullback entries are disabled.

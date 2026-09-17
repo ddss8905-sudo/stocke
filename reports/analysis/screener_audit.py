@@ -18,7 +18,7 @@ def main():
     result = {
         "evidence_type": "synthetic_behavior_checks_not_investment_performance",
         "nasdaq_configured_universe": nasdaq.CFG.universe_size,
-        "nasdaq_universe_source": "official_listing_then_20d_adv",
+        "nasdaq_universe_source": "official_listing_and_liquidity_prefilter_then_20d_adv",
         "kosdaq_fallback_list_count": len(kosdaq.BASE_KOSDAQ_TICKERS),
     }
 

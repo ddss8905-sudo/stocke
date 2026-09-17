@@ -1,4 +1,6 @@
 import csv
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Dict, List
@@ -6,7 +8,6 @@ from urllib.request import urlopen
 
 import pandas as pd
 import requests
-import yfinance as yf
 
 from .common import (
     MarketConfig,
@@ -20,7 +21,9 @@ from .common import (
 
 
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+NASDAQ_SCREENER_URL = "https://api.nasdaq.com/api/screener/stocks"
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
+LIQUIDITY_PREFILTER_SIZE = 1000
 
 
 CFG = MarketConfig(
@@ -74,35 +77,70 @@ def fetch_universe() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["ticker", "security_name"]).drop_duplicates("ticker")
 
 
+def fetch_liquidity_prefilter(listed: pd.DataFrame) -> pd.DataFrame:
+    response = requests.get(
+        NASDAQ_SCREENER_URL,
+        params={
+            "tableonly": "true",
+            "limit": 5000,
+            "offset": 0,
+            "exchange": "NASDAQ",
+            "download": "true",
+        },
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://www.nasdaq.com",
+            "Referer": "https://www.nasdaq.com/market-activity/stocks/screener",
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    rows = response.json().get("data", {}).get("rows") or []
+    listed_names = listed.set_index("ticker")["security_name"].to_dict()
+    active = []
+    for row in rows:
+        ticker = str(row.get("symbol") or "").replace(".", "-")
+        if ticker not in listed_names:
+            continue
+        close = pd.to_numeric(str(row.get("lastsale") or "").replace("$", "").replace(",", ""), errors="coerce")
+        volume = pd.to_numeric(str(row.get("volume") or "").replace(",", ""), errors="coerce")
+        if pd.isna(close) or pd.isna(volume) or close < CFG.min_price or volume <= 0:
+            continue
+        active.append({
+            "ticker": ticker,
+            "security_name": listed_names[ticker],
+            "current_dollar_volume": float(close * volume),
+        })
+    if not active:
+        raise RuntimeError("NASDAQ official screener returned no usable liquidity rows.")
+    return (
+        pd.DataFrame(active)
+        .sort_values("current_dollar_volume", ascending=False)
+        .head(LIQUIDITY_PREFILTER_SIZE)
+        .reset_index(drop=True)
+    )
+
+
 def download_ohlcv(tickers: List[str], start: str, end: str) -> Dict[str, pd.DataFrame]:
     result: Dict[str, pd.DataFrame] = {}
     symbols = list(dict.fromkeys(tickers))
     if not symbols:
         return result
-    try:
-        raw = yf.download(
-            symbols,
-            start=start,
-            end=(date.fromisoformat(end) + timedelta(days=1)).isoformat(),
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-            group_by="ticker",
-        )
-    except Exception as exc:
-        print(f"[WARN] failed to bulk download NASDAQ data: {exc}")
-        return result
-
-    for ticker in symbols:
-        try:
-            frame = raw[ticker] if isinstance(raw.columns, pd.MultiIndex) else raw
-            frame = frame.rename(columns=str.lower)
-            df = frame[["open", "high", "low", "close", "volume"]].dropna()
-            df.index = pd.to_datetime(df.index).date
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {
+            executor.submit(download_yahoo_chart, ticker, start, end): ticker
+            for ticker in symbols
+        }
+        for future in as_completed(futures):
+            ticker = futures[future]
+            try:
+                df = future.result()
+            except Exception as exc:
+                print(f"[WARN] failed to download {ticker}: {exc}")
+                continue
             if not df.empty:
                 result[ticker] = df
-        except (KeyError, TypeError):
-            continue
     return result
 
 
@@ -123,10 +161,19 @@ def download_yahoo_chart(ticker: str, start: str, end: str) -> pd.DataFrame:
     }
     headers = {"User-Agent": "Mozilla/5.0"}
 
+    for attempt in range(3):
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            break
+        except Exception as exc:
+            if attempt == 2:
+                print(f"[WARN] failed to download {ticker}: {exc}")
+                return pd.DataFrame(columns=OHLCV_COLUMNS)
+            time.sleep(0.5 * (2 ** attempt))
+
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=20)
-        response.raise_for_status()
-        payload = response.json()
         result = (payload.get("chart", {}).get("result") or [None])[0]
         if not result:
             print(f"[WARN] no Yahoo chart result for {ticker}")
@@ -161,9 +208,10 @@ def download_in_chunks(tickers: List[str], start: str, end: str, chunk_size: int
 
 
 def select_top_by_adv(end_date: str) -> pd.DataFrame:
-    universe = fetch_universe()
-    if universe.empty:
+    listed = fetch_universe()
+    if listed.empty:
         raise RuntimeError("NASDAQ official listing returned no common-stock symbols.")
+    universe = fetch_liquidity_prefilter(listed)
     start = (date.fromisoformat(end_date) - timedelta(days=45)).isoformat()
     recent = download_in_chunks(universe["ticker"].tolist(), start, end_date, chunk_size=200)
     names = universe.set_index("ticker")["security_name"].to_dict()
