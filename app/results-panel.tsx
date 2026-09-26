@@ -1,0 +1,240 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { CandlestickChart, ExternalLink, X } from "lucide-react";
+import { CandlestickSeries, ColorType, createChart, HistogramSeries } from "lightweight-charts";
+import type { CandlestickData, HistogramData, Time } from "lightweight-charts";
+import type { Market, ScreeningResult, SectorStrength } from "@/lib/types";
+
+type Period = 5 | 10 | 21;
+const periods: { days: Period; label: string }[] = [
+  { days: 5, label: "1주" },
+  { days: 10, label: "2주" },
+  { days: 21, label: "한 달" },
+];
+
+function number(value: number | null | undefined, digits = 1) {
+  return value == null || !Number.isFinite(Number(value))
+    ? "-"
+    : Number(value).toLocaleString("ko-KR", { maximumFractionDigits: digits });
+}
+
+function percent(value: number | null | undefined, digits = 1) {
+  return value == null || !Number.isFinite(Number(value)) ? "-" : `${number(value * 100, digits)}%`;
+}
+
+function signalLabel(row: ScreeningResult) {
+  if (row.entry_signal === "buy_breakout") return "Buy breakout";
+  if (row.entry_signal === "wait_extended") return "Wait";
+  return row.entry_trigger ? "Buy" : "Watch";
+}
+
+function tradingViewSymbol(market: Market, ticker: string) {
+  return `${market === "NASDAQ" ? "NASDAQ" : "KRX"}:${ticker.toUpperCase()}`;
+}
+
+type ChartCandle = { time: string; open: number; high: number; low: number; close: number; volume: number };
+
+function DomesticChart({ market, ticker }: { market: Market; ticker: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [candles, setCandles] = useState<ChartCandle[] | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCandles(null);
+    setError(false);
+    fetch(`/api/chart?market=${market}&ticker=${encodeURIComponent(ticker)}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Chart request failed");
+        const data = await response.json() as { candles: ChartCandle[] };
+        if (!data.candles.length) throw new Error("Empty chart");
+        setCandles(data.candles);
+      })
+      .catch(() => { if (!controller.signal.aborted) setError(true); });
+    return () => controller.abort();
+  }, [market, ticker]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !candles) return;
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: { textColor: "#596258", background: { type: ColorType.Solid, color: "#ffffff" }, attributionLogo: false },
+      grid: { vertLines: { color: "#f2f5f0" }, horzLines: { color: "#edf0eb" } },
+      timeScale: { borderColor: "#dfe4dc", timeVisible: false },
+      rightPriceScale: { borderColor: "#dfe4dc" },
+      crosshair: { mode: 1 },
+    });
+    const prices = chart.addSeries(CandlestickSeries, {
+      upColor: "#d94848", downColor: "#2474b5", borderVisible: false,
+      wickUpColor: "#d94848", wickDownColor: "#2474b5",
+      priceFormat: { type: "price", precision: 0, minMove: 1 },
+    });
+    prices.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })) as CandlestickData<Time>[]);
+    const volumes = chart.addSeries(HistogramSeries, {
+      priceScaleId: "volume", priceFormat: { type: "volume" },
+    });
+    volumes.priceScale().applyOptions({ scaleMargins: { top: 0.83, bottom: 0 } });
+    volumes.setData(candles.map(({ time, volume, open, close }) => ({
+      time, value: volume, color: close >= open ? "#e9abab" : "#a7c9e3",
+    })) as HistogramData<Time>[]);
+    chart.timeScale().fitContent();
+    const observer = new ResizeObserver(() => chart.resize(container.clientWidth, container.clientHeight));
+    observer.observe(container);
+    return () => { observer.disconnect(); chart.remove(); };
+  }, [candles]);
+
+  return <div className="chartWidget domesticChart">
+    <div ref={containerRef} className="chartCanvas" />
+    {!candles && <div className="chartStatus">{error ? "차트 데이터를 불러올 수 없습니다. 외부 차트를 이용해 주세요." : "차트를 불러오는 중..."}</div>}
+  </div>;
+}
+
+function ChartDialog({ row, market, onClose }: { row: ScreeningResult; market: Market; onClose: () => void }) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const symbol = tradingViewSymbol(market, row.ticker);
+  const chartUrl = market === "NASDAQ"
+    ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`
+    : `https://finance.yahoo.com/quote/${row.ticker}.${market === "KOSDAQ" ? "KQ" : "KS"}/chart/`;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+      previousFocus?.focus();
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    const container = chartRef.current;
+    if (!container || market !== "NASDAQ") return;
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.async = true;
+    script.textContent = JSON.stringify({
+      autosize: true,
+      symbol,
+      interval: "D",
+      timezone: "exchange",
+      theme: "light",
+      style: "1",
+      locale: "ko",
+      withdateranges: true,
+      hide_volume: false,
+      allow_symbol_change: false,
+      support_host: "https://www.tradingview.com",
+    });
+    container.replaceChildren(script);
+    return () => container.replaceChildren();
+  }, [market, symbol]);
+
+  return (
+    <div className="chartBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="chartDialog" role="dialog" aria-modal="true" aria-labelledby="chart-title">
+        <div className="chartHeader">
+          <div>
+            <h2 id="chart-title">{row.security_name || row.ticker} <span className="chartTicker">{row.ticker}</span></h2>
+            <p>{market} · {row.sector_name || "업종 미분류"}</p>
+          </div>
+          <button ref={closeRef} className="iconButton" type="button" onClick={onClose} aria-label="차트 닫기" title="차트 닫기"><X size={20} /></button>
+        </div>
+        <div className="chartBody">
+          {market === "NASDAQ" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} />}
+          <div className="chartDetails">
+            <span>종가 <strong>{number(row.close, 0)}</strong></span>
+            <span>매수 구간 <strong>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, 0)}–${number(row.buy_zone_high, 0)}`}</strong></span>
+            <span>초기 손절 <strong>{number(row.initial_stop_price ?? row.stop_price, 0)}</strong></span>
+            <span>2R <strong>{number(row.two_r_price, 0)}</strong></span>
+            <a href={chartUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> 외부 차트</a>
+          </div>
+        </div>
+        <div className="chartAttribution">{market === "NASDAQ" ? "Chart by " : "Prices: Yahoo Finance · Chart by "}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
+      </div>
+    </div>
+  );
+}
+
+function ResultTable({ rows, compact, onOpen }: { rows: ScreeningResult[]; compact?: boolean; onOpen: (row: ScreeningResult) => void }) {
+  return (
+    <div className="tableWrap">
+      <table>
+        <thead><tr>
+          <th>Ticker</th>
+          {!compact && <th>Signal</th>}
+          {!compact && <th>Setup</th>}
+          <th>Name</th><th>Sector</th><th>Close</th><th>Final</th><th>RS</th><th>Trend</th>
+          {compact ? <><th>Breakout</th><th>ADV20</th></> : <><th>Buy Zone</th><th>Risk</th><th>Stop</th><th>2R</th><th>Size</th></>}
+        </tr></thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={`${row.ticker}-${row.final_score}`}>
+              <td className="mono"><span className={row.entry_trigger ? "triggerDot on" : "triggerDot"} /><button className="chartLink" type="button" title={`${row.ticker} 차트 열기`} onClick={() => onOpen(row)}>{row.ticker} <CandlestickChart size={14} /></button></td>
+              {!compact && <td title={row.entry_reason ?? undefined}><span className={row.entry_trigger ? "signalPill buy" : row.entry_signal === "wait_extended" ? "signalPill wait" : "signalPill"}>{signalLabel(row)}</span></td>}
+              {!compact && <td>{row.entry_setup === "breakout" ? "Breakout" : row.entry_setup === "extended_watch" ? "Extended" : "Watch"}</td>}
+              <td className="nameCell"><button className="chartLink" type="button" onClick={() => onOpen(row)}>{row.security_name || "-"}</button></td>
+              <td>{row.sector_name || "-"}</td>
+              <td>{number(row.close, 0)}</td><td className="strong">{number(row.final_score)}</td><td>{number(row.rs_rank)}</td><td>{number(row.trend_score)}</td>
+              {compact ? <><td>{number(row.breakout_score)}</td><td>{number(row.adv20, 0)}</td></> : <>
+                <td>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, 0)}–${number(row.buy_zone_high, 0)}`}</td>
+                <td>{percent(row.risk_to_stop)}</td><td title={row.exit_plan ?? undefined}>{number(row.initial_stop_price ?? row.stop_price, 0)}</td><td>{number(row.two_r_price, 0)}</td><td>{percent(row.position_size_pct)}</td>
+              </>}
+            </tr>
+          ))}
+          {rows.length === 0 && <tr><td className="empty" colSpan={compact ? 10 : 14}>표시할 종목이 없습니다.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function ResultsPanel({ market, candidates, scored, sectors }: { market: Market; candidates: ScreeningResult[]; scored: ScreeningResult[]; sectors: SectorStrength[] }) {
+  const [period, setPeriod] = useState<Period>(5);
+  const [selectedSector, setSelectedSector] = useState<string | null>(null);
+  const [chartRow, setChartRow] = useState<ScreeningResult | null>(null);
+  const activeSectors = sectors.filter((sector) => sector.period_days === period).sort((a, b) => b.score - a.score);
+  const sectorReturns = new Map(sectors.map((sector) => [`${sector.sector_name}:${sector.period_days}`, sector.sector_return]));
+  const visibleCandidates = selectedSector ? candidates.filter((row) => row.sector_name === selectedSector) : candidates;
+  const visibleScored = selectedSector ? scored.filter((row) => row.sector_name === selectedSector) : scored;
+
+  return <>
+    <section className="section">
+      <div className="sectionHead sectorHead">
+        <div><h2>주도섹터</h2><p>분석 대상 업종별 강도 · 시장 대비 수익률, 상승 종목 비율, 거래 활성도 기준</p></div>
+        <div className="periodTabs" role="group" aria-label="섹터 분석 기간">
+          {periods.map(({ days, label }) => <button key={days} type="button" className={period === days ? "periodTab active" : "periodTab"} aria-pressed={period === days} onClick={() => setPeriod(days)}>{label}</button>)}
+        </div>
+      </div>
+      {activeSectors.length ? <div className="tableWrap"><table className="sectorTable">
+        <thead><tr><th>업종</th><th>1주</th><th>2주</th><th>한 달</th><th>시장 대비</th><th>상승 비율</th><th>거래 활성</th><th>점수</th><th>종목</th></tr></thead>
+        <tbody>{activeSectors.map((sector) => <tr key={sector.sector_name} className={selectedSector === sector.sector_name ? "selectedSectorRow" : ""}>
+          <td><button className="sectorLink" type="button" aria-pressed={selectedSector === sector.sector_name} onClick={() => setSelectedSector(selectedSector === sector.sector_name ? null : sector.sector_name)}>{sector.sector_name}</button>{sector.is_leader && <span className="leaderTag">주도</span>}</td>
+          {periods.map(({ days }) => <td key={days}>{percent(sectorReturns.get(`${sector.sector_name}:${days}`))}</td>)}
+          <td className={sector.relative_return > 0 ? "positive" : ""}>{percent(sector.relative_return)}</td><td>{percent(sector.breadth, 0)}</td><td>{number(sector.turnover_ratio, 2)}×</td><td className="strong">{number(sector.score, 0)}</td><td title={`유효 ${sector.valid_count} / ${sector.member_count}`}>{sector.valid_count}/{sector.member_count}</td>
+        </tr>)}</tbody>
+      </table></div> : <p className="sectorEmpty">이 실행에서는 표시할 업종 데이터가 없습니다. 업종 분류나 가격 이력이 부족할 수 있습니다.</p>}
+    </section>
+
+    <section className="section">
+      <div className="sectionHead"><div><h2>Candidate List{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>후보 종목을 누르면 차트가 열립니다.</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
+      <ResultTable rows={visibleCandidates} onOpen={setChartRow} />
+    </section>
+
+    <section className="section">
+      <div className="sectionHead"><div><h2>Full Scoreboard</h2><p>현재 분석 대상의 상위 200종목</p></div></div>
+      <ResultTable rows={visibleScored} compact onOpen={setChartRow} />
+    </section>
+    {chartRow && <ChartDialog row={chartRow} market={market} onClose={() => setChartRow(null)} />}
+  </>;
+}
+

@@ -312,6 +312,245 @@ tr:last-child td {
   text-align: center;
 }
 
+.chartLink,
+.sectorLink {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: var(--accent-2);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 700;
+  gap: 5px;
+  padding: 0;
+  text-align: left;
+}
+
+.chartLink:hover,
+.sectorLink:hover {
+  text-decoration: underline;
+}
+
+.chartLink:focus-visible,
+.sectorLink:focus-visible,
+.periodTab:focus-visible,
+.iconButton:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 3px;
+}
+
+.sectorHead {
+  gap: 16px;
+}
+
+.periodTabs {
+  background: #eef2ed;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: flex;
+  flex: none;
+  padding: 3px;
+}
+
+.periodTab {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 64px;
+  padding: 8px 10px;
+}
+
+.periodTab.active {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(31, 43, 35, 0.12);
+  color: var(--ink);
+}
+
+.sectorTable {
+  min-width: 820px;
+}
+
+.sectorTable th:first-child,
+.sectorTable td:first-child {
+  text-align: left;
+}
+
+.selectedSectorRow {
+  background: #eff7f3;
+}
+
+.leaderTag {
+  background: #e8f5ee;
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 8px;
+  padding: 3px 5px;
+}
+
+.positive {
+  color: var(--accent);
+}
+
+.sectorEmpty {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 24px 20px;
+}
+
+.clearFilter {
+  align-items: center;
+  background: #f2f5f0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  font-size: 13px;
+  gap: 5px;
+  padding: 7px 10px;
+}
+
+.chartBackdrop {
+  align-items: center;
+  background: rgba(20, 31, 28, 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 100;
+}
+
+.chartDialog {
+  background: var(--panel);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+  width: min(1100px, 100%);
+}
+
+.chartHeader {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+
+.chartHeader h2 {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.chartHeader p {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.chartTicker {
+  color: var(--muted);
+  font-family: "Courier New", monospace;
+  font-size: 14px;
+}
+
+.iconButton {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.chartBody {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chartWidget {
+  height: clamp(330px, 65dvh, 680px);
+  width: 100%;
+}
+
+.domesticChart {
+  position: relative;
+}
+
+.chartCanvas {
+  height: 100%;
+  width: 100%;
+}
+
+.chartStatus {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 14px;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: absolute;
+  text-align: center;
+}
+
+.chartDetails {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 12px 24px;
+  padding: 14px 20px;
+}
+
+.chartDetails span {
+  color: var(--muted);
+}
+
+.chartDetails strong {
+  color: var(--ink);
+  margin-left: 5px;
+}
+
+.chartDetails a {
+  align-items: center;
+  color: var(--accent-2);
+  display: inline-flex;
+  font-weight: 700;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.chartAttribution {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 7px 20px;
+  text-align: right;
+}
+
+.chartAttribution a {
+  color: var(--accent-2);
+}
+
 @media (max-width: 900px) {
   main {
     padding: 18px;
@@ -339,4 +578,32 @@ tr:last-child td {
   .stats {
     grid-template-columns: 1fr;
   }
+
+  .sectorHead {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .periodTabs {
+    align-self: flex-start;
+  }
+
+  .chartBackdrop {
+    padding: 0;
+  }
+
+  .chartDialog {
+    border-radius: 0;
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+
+  .chartWidget {
+    height: max(330px, calc(100dvh - 220px));
+  }
+
+  .chartDetails a {
+    margin-left: 0;
+  }
 }
+

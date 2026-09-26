@@ -97,7 +97,7 @@ def insert_supabase(table: str, body: Any) -> requests.Response:
     return response
 
 
-def upload_to_supabase(payload: Dict[str, Any]) -> None:
+def upload_to_supabase(payload: Dict[str, Any]) -> str:
     run_body = {
         "market": payload["market"],
         "run_date": payload["run_date"],
@@ -118,6 +118,7 @@ def upload_to_supabase(payload: Dict[str, Any]) -> None:
     candidates_by_ticker = {row["ticker"]: row for row in payload["candidates"]}
     for row in payload["scored"]:
         row = dict(row)
+        row.pop("sector_name", None)
         candidate = candidates_by_ticker.get(row["ticker"])
         row["run_id"] = run_id
         row["market"] = payload["market"]
@@ -133,6 +134,39 @@ def upload_to_supabase(payload: Dict[str, Any]) -> None:
     if result_rows:
         for index in range(0, len(result_rows), 250):
             insert_supabase("screening_results", result_rows[index:index + 250])
+    return run_id
+
+
+def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
+    base = os.environ["SUPABASE_URL"].rstrip("/") + "/storage/v1"
+    bucket = "stocke-sector-strength"
+    headers = supabase_headers()
+    response = requests.get(f"{base}/bucket/{bucket}", headers=headers, timeout=30)
+    if response.status_code == 404:
+        response = requests.post(
+            f"{base}/bucket", headers=headers,
+            json={"id": bucket, "name": bucket, "public": False}, timeout=30,
+        )
+    if response.status_code != 409:
+        response.raise_for_status()
+
+    snapshot = {
+        "market": payload["market"],
+        "run_id": run_id,
+        "run_date": payload["run_date"],
+        "sectors": payload.get("sector_strength", []),
+        "members": {
+            row["ticker"]: row.get("sector_name")
+            for row in payload["scored"] if row.get("sector_name")
+        },
+    }
+    response = requests.post(
+        f"{base}/object/{bucket}/{payload['market']}/{run_id}.json",
+        headers={**headers, "Content-Type": "application/json"},
+        data=json.dumps(snapshot, ensure_ascii=False).encode("utf-8"),
+        timeout=60,
+    )
+    response.raise_for_status()
 
 
 def main() -> None:
@@ -155,6 +189,7 @@ def main() -> None:
         "selected": records(result["selected"]),
         "scored": records(result["scored"]),
         "candidates": records(result["candidates"]),
+        "sector_strength": records(result.get("sector_strength", pd.DataFrame())),
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -163,8 +198,10 @@ def main() -> None:
     print(f"[INFO] local payload saved: {path}")
 
     if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
-        upload_to_supabase(payload)
+        run_id = upload_to_supabase(payload)
         print("[INFO] uploaded to Supabase")
+        upload_sector_snapshot(payload, run_id)
+        print("[INFO] uploaded sector snapshot")
     else:
         print("[INFO] Supabase env vars are missing; skipped upload")
 

@@ -16,6 +16,7 @@ export type ScreeningRun = {
 export type ScreeningResult = {
   ticker: string;
   security_name: string | null;
+  sector_name?: string | null;
   close: number | null;
   adv20: number | null;
   final_score: number | null;
@@ -62,10 +63,27 @@ export type ScreeningResult = {
   is_candidate: boolean;
 };
 
+export type SectorStrength = {
+  sector_name: string;
+  period_days: 5 | 10 | 21;
+  sector_return: number;
+  benchmark_return: number;
+  relative_return: number;
+  breadth: number;
+  turnover_ratio: number;
+  score: number;
+  member_count: number;
+  valid_count: number;
+  coverage: number;
+  is_leader: boolean;
+};
+
 export type DashboardData = {
   market: Market;
   run: ScreeningRun | null;
   candidates: ScreeningResult[];
   scored: ScreeningResult[];
+  sectors: SectorStrength[];
   usingSampleData: boolean;
 };
+

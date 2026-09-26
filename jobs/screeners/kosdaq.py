@@ -1,3 +1,4 @@
+import os
 import re
 from datetime import date, timedelta
 from typing import Dict, List
@@ -15,6 +16,7 @@ from .common import (
     score_universe,
     start_date,
 )
+from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -305,6 +307,13 @@ def select_top_by_adv(end_date: str) -> pd.DataFrame:
 def run(end_date: str) -> dict:
     effective_end_date = resolve_latest_trading_date(end_date)
     selected = select_top_by_adv(effective_end_date)
+    sectors = fetch_krx_sectors(effective_end_date, "KOSDAQ")
+    if len(sectors) < len(selected) * 0.8 and os.environ.get("KIS_APP_KEY") and os.environ.get("KIS_APP_SECRET"):
+        try:
+            from .kospi_api import KisClient
+            sectors = complete_domestic_sectors(selected["ticker"].tolist(), sectors, KisClient())
+        except Exception as exc:
+            print(f"[WARN] KIS sector fallback unavailable: {exc}")
     tickers = selected["ticker"].tolist()
     names = selected.set_index("ticker")["security_name"].to_dict()
     all_tickers = sorted(set(tickers + CFG.benchmark_tickers))
@@ -329,17 +338,20 @@ def run(end_date: str) -> dict:
             continue
         row = latest_feature_row(ticker, names.get(ticker, ""), df, primary, secondary, CFG)
         if row:
+            row["sector_name"] = sectors.get(ticker)
             rows.append(row)
 
     scored = score_universe(pd.DataFrame(rows)) if rows else pd.DataFrame()
     market_regime = build_market_regime(primary, secondary, scored)
     candidates = build_candidates(scored, CFG, market_regime) if not scored.empty else pd.DataFrame()
+    sector_strength = calculate_sector_strength(scored, ohlcv, primary)
     return {
         "market": CFG.market,
         "run_date": effective_end_date,
         "selected": selected,
         "scored": scored,
         "candidates": candidates,
+        "sector_strength": sector_strength,
         "market_bullish": market_regime["market_bullish"],
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],

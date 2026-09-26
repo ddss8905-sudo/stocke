@@ -10,10 +10,34 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "jobs"))
 
 from backtest_excel_reports import build_detail
-from screeners import common, nasdaq
+from screeners import common, nasdaq, sectors
 
 
 class StrategyTests(unittest.TestCase):
+    def test_sector_leader_requires_broad_market_outperformance(self):
+        index = pd.bdate_range("2026-07-01", periods=50)
+        benchmark = pd.DataFrame({"close": np.linspace(100, 101, 50)}, index=index)
+        histories = {}
+        members = []
+        for sector, final_price in (("Strong", 125), ("Weak", 95)):
+            for ticker_index in range(5):
+                ticker = f"{sector}{ticker_index}"
+                close = np.linspace(100, final_price + ticker_index, 50)
+                histories[ticker] = pd.DataFrame({"close": close, "volume": 1_000_000}, index=index)
+                members.append({"ticker": ticker, "sector_name": sector})
+
+        result = sectors.calculate_sector_strength(pd.DataFrame(members), histories, benchmark)
+        self.assertEqual(len(result), 6)
+        one_week = result[result["period_days"] == 5].set_index("sector_name")
+        self.assertTrue(one_week.loc["Strong", "is_leader"])
+        self.assertFalse(one_week.loc["Weak", "is_leader"])
+        self.assertGreater(one_week.loc["Strong", "relative_return"], 0)
+
+        del histories["Strong0"]
+        del histories["Strong1"]
+        reduced = sectors.calculate_sector_strength(pd.DataFrame(members), histories, benchmark)
+        self.assertNotIn("Strong", reduced["sector_name"].tolist())
+
     def test_market_regime_uses_80_40_0_exposure(self):
         def frame(last_close, ma50, ma200):
             close = np.full(220, last_close, dtype=float)

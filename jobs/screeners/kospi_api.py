@@ -17,6 +17,7 @@ from .common import (
     score_universe,
     start_date,
 )
+from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -209,6 +210,19 @@ class KisClient:
             return pd.DataFrame(columns=SELECTED_COLUMNS)
         return pd.DataFrame(rows, columns=SELECTED_COLUMNS).sort_values("adv", ascending=False).reset_index(drop=True)
 
+    def stock_sector(self, ticker: str) -> str:
+        response = requests.get(
+            f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-price",
+            headers=self.headers("FHKST01010100"),
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("rt_cd") not in (None, "0"):
+            return ""
+        return str((payload.get("output") or {}).get("bstp_kor_isnm") or "").strip()
+
     def daily_chart(self, ticker: str, start: str, end: str) -> pd.DataFrame:
         start_dt = date.fromisoformat(start)
         end_dt = date.fromisoformat(end)
@@ -319,6 +333,9 @@ def run(end_date: str) -> dict:
     client = KisClient()
     effective_end_date = resolve_latest_trading_date(end_date)
     selected = fetch_top_by_current_value(client)
+    sectors = complete_domestic_sectors(
+        selected["ticker"].tolist(), fetch_krx_sectors(effective_end_date, "KOSPI"), client
+    )
     tickers = selected["ticker"].tolist()
     names = selected.set_index("ticker")["security_name"].to_dict()
     all_tickers = sorted(set(tickers + CFG.benchmark_tickers))
@@ -337,6 +354,7 @@ def run(end_date: str) -> dict:
             "selected": selected,
             "scored": pd.DataFrame(),
             "candidates": pd.DataFrame(),
+            "sector_strength": pd.DataFrame(),
             "market_bullish": False,
             "market_regime_score": 0.0,
             "market_exposure": 0.0,
@@ -361,6 +379,7 @@ def run(end_date: str) -> dict:
             continue
         row = latest_feature_row(ticker, names.get(ticker, ""), df, primary, secondary, CFG)
         if row:
+            row["sector_name"] = sectors.get(ticker)
             rows.append(row)
 
     print(
@@ -371,12 +390,14 @@ def run(end_date: str) -> dict:
     scored = score_universe(pd.DataFrame(rows)) if rows else pd.DataFrame()
     market_regime = build_market_regime(primary, secondary, scored)
     candidates = build_candidates(scored, CFG, market_regime) if not scored.empty else pd.DataFrame()
+    sector_strength = calculate_sector_strength(scored, ohlcv, primary)
     return {
         "market": CFG.market,
         "run_date": effective_end_date,
         "selected": selected,
         "scored": scored,
         "candidates": candidates,
+        "sector_strength": sector_strength,
         "market_bullish": market_regime["market_bullish"],
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],

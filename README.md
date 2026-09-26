@@ -81,6 +81,16 @@ The shared screener logic applies to `NASDAQ`, `KOSDAQ`, and `KOSPI_API`.
 Run `db/migrations/002_add_risk_regime_entry_columns.sql` in Supabase SQL Editor before uploading new runs that include these fields.
 Run `db/migrations/003_add_trend_following_plan_columns.sql` before uploading runs from the enhanced trend-following engine.
 
+## Charts and leading sectors
+
+Click a ticker or company name in either results table to open a chart. NASDAQ uses the TradingView widget. Korean markets use Yahoo Finance daily OHLCV data rendered with TradingView Lightweight Charts because some KRX symbols are unavailable in the embed. The panel also shows the screener's buy zone, initial stop, and 2R level. An external-chart link remains available if chart data cannot be loaded.
+
+Each market run calculates sector strength over 5, 10, and 21 trading sessions using all eligible scored stocks, not only the visible candidates. Within each sector, the median stock return is compared with the market benchmark; rising-stock breadth and median trading-value activity contribute to a 60/25/15 percentile score. A sector is marked leading only when its score is in the top 20%, its median return is positive and above the benchmark, at least 60% of members rose, at least five stocks have data, and coverage is at least 80%. The sector panel reports the scanned universe, not the entire exchange.
+
+NASDAQ sectors come from the Nasdaq screener feed. Korean sectors use KRX classifications when available and KIS stock-price metadata as a fallback. The KOSDAQ workflow therefore also needs `KIS_APP_KEY` and `KIS_APP_SECRET` GitHub secrets for reliable sector coverage. Price screening continues if classification is unavailable; the sector panel reports that it has no data.
+
+Sector results and ticker-to-sector mappings are stored per run in the private Supabase Storage bucket `stocke-sector-strength`. The workflow creates the bucket with its existing service-role key and uploads one JSON object named `<MARKET>/<run_id>.json`; the Next.js server reads that object with the same server-side key. No SQL migration is needed.
+
 ## Exit tracking model
 Exit rules need position state, not just a daily screener row. A position tracker should store the entry price, initial stop, highest close since entry, whether the 2R trail was activated, current trailing stop, and latest action. Each daily run can then update that state with fresh OHLCV data.
 

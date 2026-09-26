@@ -24,6 +24,7 @@ function sampleDashboardData(market: Market): DashboardData {
     run: null,
     candidates: sampleRows[market],
     scored: sampleRows[market],
+    sectors: [],
     usingSampleData: true,
   };
 }
@@ -82,7 +83,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     );
     const run = runs[0] ?? null;
     if (!run) {
-      return { market, run: null, candidates: [], scored: [], usingSampleData: false };
+      return { market, run: null, candidates: [], scored: [], sectors: [], usingSampleData: false };
     }
 
     const base = `screening_results?run_id=eq.${run.id}`;
@@ -93,7 +94,33 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
       `${base}&order=final_score.desc&limit=200`
     );
 
-    return { market, run, candidates, scored, usingSampleData: false };
+    let sectors = [] as DashboardData["sectors"];
+    let members: Record<string, string> = {};
+    try {
+      const response = await fetch(
+        `${supabaseBaseUrl()}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${run.id}.json`,
+        { headers: headers(), next: { revalidate: 300 } }
+      );
+      if (response.ok) {
+        const snapshot = await response.json() as {
+          run_id: string;
+          market: Market;
+          sectors: DashboardData["sectors"];
+          members: Record<string, string>;
+        };
+        if (snapshot.run_id === run.id && snapshot.market === market) {
+          sectors = snapshot.sectors;
+          members = snapshot.members;
+        }
+      } else if (response.status !== 404) {
+        throw new Error(`Sector snapshot request failed: ${response.status}`);
+      }
+    } catch (error) {
+      console.error("[supabase] sector data fetch failed", errorDetails(error));
+    }
+
+    const withSector = (row: ScreeningResult) => ({ ...row, sector_name: members[row.ticker] ?? null });
+    return { market, run, candidates: candidates.map(withSector), scored: scored.map(withSector), sectors, usingSampleData: false };
   } catch (error) {
     console.error("[supabase] dashboard data fetch failed", {
       market,
@@ -104,3 +131,4 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     return sampleDashboardData(market);
   }
 }
+
