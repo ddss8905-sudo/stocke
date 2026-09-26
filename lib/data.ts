@@ -64,7 +64,7 @@ async function supabaseGet<T>(path: string): Promise<T> {
 
   const response = await fetch(`${baseUrl}/rest/v1/${path}`, {
     headers: headers(),
-    next: { revalidate: 300 },
+    cache: "no-store",
   });
   if (!response.ok) {
     throw new Error(`Supabase request failed: ${response.status}`);
@@ -99,7 +99,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     try {
       const response = await fetch(
         `${supabaseBaseUrl()}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${run.id}.json`,
-        { headers: headers(), next: { revalidate: 300 } }
+        { headers: headers(), cache: "no-store" }
       );
       if (response.ok) {
         const snapshot = await response.json() as {
