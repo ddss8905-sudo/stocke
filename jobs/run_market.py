@@ -142,7 +142,8 @@ def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
     bucket = "stocke-sector-strength"
     headers = supabase_headers()
     response = requests.get(f"{base}/bucket/{bucket}", headers=headers, timeout=30)
-    if response.status_code == 404:
+    error_code = response.json().get("code") if not response.ok else None
+    if response.status_code == 404 or error_code == "NoSuchBucket":
         response = requests.post(
             f"{base}/bucket", headers=headers,
             json={"id": bucket, "name": bucket, "public": False}, timeout=30,
