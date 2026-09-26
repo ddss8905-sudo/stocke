@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,18 @@ from screeners import common, nasdaq, sectors
 
 
 class StrategyTests(unittest.TestCase):
+    def test_official_listing_filters_market_and_corrects_stale_name(self):
+        selected = pd.DataFrame({
+            "ticker": ["033640", "005930"],
+            "security_name": ["네오위즈", "삼성전자"],
+            "close": [100, 200],
+        })
+        listing = {"033640": {"name": "네패스", "sector": "반도체 제조업"}}
+        with patch.object(sectors, "fetch_kind_listing", return_value=listing):
+            result = sectors.filter_official_listing(selected, "KOSDAQ")
+        self.assertEqual(result["ticker"].tolist(), ["033640"])
+        self.assertEqual(result["security_name"].tolist(), ["네패스"])
+
     def test_sector_leader_requires_broad_market_outperformance(self):
         index = pd.bdate_range("2026-07-01", periods=50)
         benchmark = pd.DataFrame({"close": np.linspace(100, 101, 50)}, index=index)

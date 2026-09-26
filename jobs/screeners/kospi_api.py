@@ -17,7 +17,7 @@ from .common import (
     score_universe,
     start_date,
 )
-from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors
+from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors, filter_official_listing
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -333,6 +333,7 @@ def run(end_date: str) -> dict:
     client = KisClient()
     effective_end_date = resolve_latest_trading_date(end_date)
     selected = fetch_top_by_current_value(client)
+    selected = filter_official_listing(selected, "KOSPI")
     sectors = complete_domestic_sectors(selected["ticker"].tolist(), {}, client)
     if len(sectors) < len(selected) * 0.8:
         sectors = {**fetch_krx_sectors(effective_end_date, "KOSPI"), **sectors}

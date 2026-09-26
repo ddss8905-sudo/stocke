@@ -16,7 +16,7 @@ from .common import (
     score_universe,
     start_date,
 )
-from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors
+from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors, filter_official_listing
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -275,6 +275,7 @@ def download_ohlcv(tickers: List[str], start: str, end: str) -> Dict[str, pd.Dat
 def select_top_by_adv(end_date: str) -> pd.DataFrame:
     effective_end_date = resolve_latest_trading_date(end_date)
     universe = fetch_universe(effective_end_date)
+    universe = filter_official_listing(universe, "KOSDAQ")
     start = (date.fromisoformat(effective_end_date) - timedelta(days=45)).isoformat()
 
     rows = []

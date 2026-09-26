@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Dict, List
 
 import numpy as np
@@ -10,7 +11,8 @@ from pykrx import stock
 PERIODS = (5, 10, 21)
 
 
-def fetch_kind_sectors(market: str) -> Dict[str, str]:
+@lru_cache(maxsize=2)
+def fetch_kind_listing(market: str) -> Dict[str, dict]:
     market_type = "kosdaqMkt" if market == "KOSDAQ" else "stockMkt"
     response = requests.get(
         "https://kind.krx.co.kr/corpgeneral/corpList.do",
@@ -20,19 +22,36 @@ def fetch_kind_sectors(market: str) -> Dict[str, str]:
     )
     response.raise_for_status()
     document = BeautifulSoup(response.content.decode("cp949"), "html.parser")
-    sectors = {}
+    listing = {}
     for row in document.select("tr"):
         cells = row.select("td")
         if len(cells) < 4:
             continue
+        name = cells[0].get_text(" ", strip=True)
         ticker = cells[2].get_text(" ", strip=True)
         sector = cells[3].get_text(" ", strip=True)
-        if len(ticker) == 6 and ticker.isdigit() and sector:
-            sectors[ticker] = sector
-    if not sectors:
-        raise ValueError("KIND returned no industry classifications")
-    print(f"[INFO] KIND {market} sector classifications: {len(sectors)}")
-    return sectors
+        if len(ticker) == 6 and ticker.isdigit() and name:
+            listing[ticker] = {"name": name, "sector": sector}
+    if not listing:
+        raise ValueError("KIND returned no listed companies")
+    print(f"[INFO] KIND {market} listed companies: {len(listing)}")
+    return listing
+
+
+def fetch_kind_sectors(market: str) -> Dict[str, str]:
+    return {
+        ticker: company["sector"]
+        for ticker, company in fetch_kind_listing(market).items()
+        if company["sector"]
+    }
+
+
+def filter_official_listing(selected: pd.DataFrame, market: str) -> pd.DataFrame:
+    listing = fetch_kind_listing(market)
+    result = selected[selected["ticker"].isin(listing)].copy()
+    result["security_name"] = result["ticker"].map(lambda ticker: listing[ticker]["name"])
+    print(f"[INFO] {market} official listing filter: {len(result)}/{len(selected)}")
+    return result.reset_index(drop=True)
 
 
 def fetch_krx_sectors(run_date: str, market: str) -> Dict[str, str]:
