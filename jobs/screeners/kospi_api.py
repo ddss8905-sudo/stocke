@@ -333,9 +333,9 @@ def run(end_date: str) -> dict:
     client = KisClient()
     effective_end_date = resolve_latest_trading_date(end_date)
     selected = fetch_top_by_current_value(client)
-    sectors = complete_domestic_sectors(
-        selected["ticker"].tolist(), fetch_krx_sectors(effective_end_date, "KOSPI"), client
-    )
+    sectors = complete_domestic_sectors(selected["ticker"].tolist(), {}, client)
+    if len(sectors) < len(selected) * 0.8:
+        sectors = {**fetch_krx_sectors(effective_end_date, "KOSPI"), **sectors}
     tickers = selected["ticker"].tolist()
     names = selected.set_index("ticker")["security_name"].to_dict()
     all_tickers = sorted(set(tickers + CFG.benchmark_tickers))

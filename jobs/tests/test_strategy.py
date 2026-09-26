@@ -38,6 +38,19 @@ class StrategyTests(unittest.TestCase):
         reduced = sectors.calculate_sector_strength(pd.DataFrame(members), histories, benchmark)
         self.assertNotIn("Strong", reduced["sector_name"].tolist())
 
+    def test_small_sector_is_visible_but_not_declared_leading(self):
+        index = pd.bdate_range("2026-07-01", periods=50)
+        benchmark = pd.DataFrame({"close": np.full(50, 100.0)}, index=index)
+        histories = {
+            f"TEST{i}": pd.DataFrame({"close": np.linspace(100, 125, 50), "volume": 1_000_000}, index=index)
+            for i in range(4)
+        }
+        scored = pd.DataFrame({"ticker": list(histories), "sector_name": "Electronics"})
+        result = sectors.calculate_sector_strength(scored, histories, benchmark)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result["valid_count"].tolist(), [4, 4, 4])
+        self.assertFalse(result["is_leader"].any())
+
     def test_market_regime_uses_80_40_0_exposure(self):
         def frame(last_close, ma50, ma200):
             close = np.full(220, last_close, dtype=float)

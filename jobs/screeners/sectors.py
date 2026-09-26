@@ -89,6 +89,7 @@ def calculate_sector_strength(
     sector_members = sector_members[sector_members["sector_name"].astype(str).str.strip() != ""]
     if sector_members.empty:
         return pd.DataFrame(columns=columns)
+    minimum_sample = 3 if len(sector_members) < 30 else 5
 
     benchmark_close = pd.to_numeric(benchmark["close"], errors="coerce").dropna()
     if len(benchmark_close) < max(PERIODS) + 1:
@@ -129,7 +130,7 @@ def calculate_sector_strength(
             member_count = len(members)
             valid_count = len(values)
             coverage = valid_count / member_count
-            if valid_count < 5 or coverage < 0.8:
+            if valid_count < minimum_sample or coverage < 0.8:
                 continue
             sector_return = float(np.median([value["return"] for value in values]))
             rows.append({
@@ -157,6 +158,7 @@ def calculate_sector_strength(
         ) * 100
         result.loc[index, "is_leader"] = (
             (result.loc[index, "score"].rank(pct=True) > 0.8) &
+            (group["valid_count"] >= 5) &
             (group["sector_return"] > 0) &
             (group["relative_return"] > 0) &
             (group["breadth"] >= 0.6)
