@@ -148,6 +148,8 @@ def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
             json={"id": bucket, "name": bucket, "public": False}, timeout=30,
         )
     if response.status_code != 409:
+        if not response.ok:
+            print(f"[ERROR] Supabase Storage bucket status={response.status_code} body={response.text[:1000]}")
         response.raise_for_status()
 
     snapshot = {
