@@ -87,7 +87,7 @@ Click a ticker or company name in either results table to open a chart. NASDAQ u
 
 Each market run calculates sector strength over 5, 10, and 21 trading sessions using all eligible scored stocks, not only the visible candidates. Within each sector, the median stock return is compared with the market benchmark; rising-stock breadth and median trading-value activity contribute to a 60/25/15 percentile score. A sector is marked leading only when its score is in the top 20%, its median return is positive and above the benchmark, at least 60% of members rose, at least five stocks have data, and coverage is at least 80%. The sector panel reports the scanned universe, not the entire exchange.
 
-NASDAQ sectors come from the Nasdaq screener feed. Korean sectors use KRX classifications when available and KIS stock-price metadata as a fallback. The KOSDAQ workflow therefore also needs `KIS_APP_KEY` and `KIS_APP_SECRET` GitHub secrets for reliable sector coverage. Price screening continues if classification is unavailable; the sector panel reports that it has no data.
+NASDAQ sectors come from the Nasdaq screener feed. Korean sectors use KRX classifications, falling back to the KRX KIND listed-company industry file and then KIS stock-price metadata for any remaining gaps. Price screening continues if classification is unavailable; the sector panel reports that it has no data.
 
 Sector results and ticker-to-sector mappings are stored per run in the private Supabase Storage bucket `stocke-sector-strength`. The workflow creates the bucket with its existing service-role key and uploads one JSON object named `<MARKET>/<run_id>.json`; the Next.js server reads that object with the same server-side key. No SQL migration is needed.
 

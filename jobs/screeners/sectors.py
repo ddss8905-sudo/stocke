@@ -2,10 +2,37 @@ from typing import Dict, List
 
 import numpy as np
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 from pykrx import stock
 
 
 PERIODS = (5, 10, 21)
+
+
+def fetch_kind_sectors(market: str) -> Dict[str, str]:
+    market_type = "kosdaqMkt" if market == "KOSDAQ" else "stockMkt"
+    response = requests.get(
+        "https://kind.krx.co.kr/corpgeneral/corpList.do",
+        params={"method": "download", "searchType": "13", "marketType": market_type},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    document = BeautifulSoup(response.content.decode("cp949"), "html.parser")
+    sectors = {}
+    for row in document.select("tr"):
+        cells = row.select("td")
+        if len(cells) < 4:
+            continue
+        ticker = cells[2].get_text(" ", strip=True)
+        sector = cells[3].get_text(" ", strip=True)
+        if len(ticker) == 6 and ticker.isdigit() and sector:
+            sectors[ticker] = sector
+    if not sectors:
+        raise ValueError("KIND returned no industry classifications")
+    print(f"[INFO] KIND {market} sector classifications: {len(sectors)}")
+    return sectors
 
 
 def fetch_krx_sectors(run_date: str, market: str) -> Dict[str, str]:
@@ -21,7 +48,11 @@ def fetch_krx_sectors(run_date: str, market: str) -> Dict[str, str]:
         }
     except Exception as exc:
         print(f"[WARN] {market} sector classifications unavailable: {exc}")
-        return {}
+        try:
+            return fetch_kind_sectors(market)
+        except Exception as fallback_exc:
+            print(f"[WARN] KIND {market} sector classifications unavailable: {fallback_exc}")
+            return {}
 
 
 def complete_domestic_sectors(tickers: List[str], sectors: Dict[str, str], client) -> Dict[str, str]:
