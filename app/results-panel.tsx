@@ -238,7 +238,7 @@ export function ResultsPanel({ market, runId, candidates, scored, sectors }: { m
     </section>
 
     <section className="section">
-      <div className="sectionHead"><div><h2>Full Scoreboard</h2><p>현재 분석 대상의 상위 200종목</p></div></div>
+      <div className="sectionHead"><div><h2>Full Scoreboard</h2><p>점수화된 {scored.length}종목</p></div></div>
       <ResultTable rows={visibleScored} compact onOpen={setChartRow} />
     </section>
     {chartRow && <ChartDialog row={chartRow} market={market} runId={runId} onClose={() => setChartRow(null)} />}
