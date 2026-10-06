@@ -1,9 +1,6 @@
 import os
-import re
 from datetime import date, timedelta
 from typing import Dict, List
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 import pandas as pd
 import requests
@@ -17,7 +14,7 @@ from .common import (
     score_universe,
     start_date,
 )
-from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_krx_sectors, filter_official_listing
+from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_kind_sectors, fetch_krx_sectors, filter_official_listing
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -77,44 +74,41 @@ def market_ohlcv_value(row: pd.Series, english_name: str, fallback_position: int
 def fetch_naver_current_value() -> pd.DataFrame:
     rows = []
     seen = set()
-    headers = {"User-Agent": "Mozilla/5.0"}
-    link_pattern = re.compile(r'/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>')
-    number_pattern = re.compile(r'<td class="number">([^<]*)</td>')
-
-    for page in range(1, 45):
-        params = [
-            ("sosok", "0"),
-            ("page", str(page)),
-            ("fieldIds", "quant"),
-            ("fieldIds", "amount"),
-        ]
-        url = f"https://finance.naver.com/sise/sise_market_sum.naver?{urlencode(params)}"
+    url = "https://stock.naver.com/api/stockSecurity/individual-stocks/v3/domestic"
+    for page in range(15):
         try:
-            with urlopen(Request(url, headers=headers), timeout=30) as response:
-                html = response.read().decode("euc-kr", errors="ignore")
+            response = requests.get(
+                url,
+                params={
+                    "listingType": "tradingValueDesc",
+                    "exchangeType": "krx",
+                    "index": page,
+                    "size": 100,
+                },
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            items = payload.get("items")
+            if not isinstance(items, list):
+                raise ValueError("Naver stock list returned no items")
         except Exception as exc:
-            print(f"[WARN] failed to fetch Naver KOSPI page {page}: {exc}")
-            continue
-
-        matches = list(link_pattern.finditer(html))
-        if not matches:
+            print(f"[WARN] failed to fetch Naver KOSPI page {page + 1}: {exc}")
             break
 
-        for index, match in enumerate(matches):
-            ticker, name = match.group(1), match.group(2).strip()
-            if ticker in seen or is_excluded_name(name):
+        for item in items:
+            ticker = str(item.get("itemCode") or "")
+            name = str(item.get("itemName") or "").strip()
+            if item.get("marketType") != "KOSPI" or len(ticker) != 6 or not ticker.isdigit():
                 continue
-            next_start = matches[index + 1].start() if index + 1 < len(matches) else len(html)
-            row_html = html[match.end():next_start]
-            numbers = [to_float_text(value) for value in number_pattern.findall(row_html)]
-            if len(numbers) < 4:
+            if ticker in seen or not name or is_excluded_name(name):
                 continue
-
-            close = numbers[0]
-            volume = numbers[2]
-            trading_value_million = numbers[3]
-            trading_value = trading_value_million * 1_000_000
-            if pd.isna(close) or pd.isna(trading_value) or close < CFG.min_price:
+            quote = item.get("krx") or {}
+            close = parse_number(quote.get("currentPrice"))
+            volume = parse_number(quote.get("tradingVolume"))
+            trading_value = parse_number(quote.get("tradingValue"))
+            if pd.isna(close) or pd.isna(trading_value) or close < CFG.min_price or trading_value <= 0:
                 continue
 
             seen.add(ticker)
@@ -125,15 +119,15 @@ def fetch_naver_current_value() -> pd.DataFrame:
                 "volume": float(volume) if not pd.isna(volume) else None,
                 "value": float(trading_value),
             })
+        if len(rows) >= CFG.universe_size + 20 or not payload.get("hasNext") or not items:
+            break
 
     if not rows:
         return pd.DataFrame(columns=NAVER_COLUMNS)
-    return pd.DataFrame(rows, columns=NAVER_COLUMNS)
-
-
-def to_float_text(value: str) -> float:
-    text = re.sub(r"[^0-9.\-]", "", value)
-    return float(text) if text else float("nan")
+    result = pd.DataFrame(rows, columns=NAVER_COLUMNS)
+    result = result.sort_values("value", ascending=False).head(CFG.universe_size + 20).reset_index(drop=True)
+    print(f"[INFO] Naver KOSPI trading-value listing: {len(result)} rows")
+    return result
 
 
 class KisClient:
@@ -291,21 +285,20 @@ def parse_number(value) -> float:
 
 
 def fetch_top_by_current_value(client: KisClient) -> pd.DataFrame:
-    selected = client.volume_rank()
-    if not selected.empty:
-        print(f"[INFO] KIS volume-rank returned {len(selected)} rows")
-    if len(selected) >= CFG.universe_size:
-        return selected.head(CFG.universe_size).reset_index(drop=True)
-
-    print("[WARN] KIS volume-rank returns at most about 30 rows; supplementing with Naver Finance fallback.")
     naver = fetch_naver_current_value()
-    if naver.empty:
-        return selected[SELECTED_COLUMNS].reset_index(drop=True)
+    selected = naver.rename(columns={"value": "adv"})[SELECTED_COLUMNS]
+    if len(selected) < CFG.universe_size:
+        print(f"[WARN] Naver listed {len(selected)} KOSPI stocks; supplementing with KIS volume-rank.")
+        kis_rank = client.volume_rank()
+        print(f"[INFO] KIS volume-rank returned {len(kis_rank)} rows")
+        selected = pd.concat([selected, kis_rank[SELECTED_COLUMNS]], ignore_index=True)
 
-    supplement = naver.rename(columns={"value": "adv"})[SELECTED_COLUMNS]
-    combined = pd.concat([selected[SELECTED_COLUMNS], supplement], ignore_index=True)
+    combined = selected
     combined = combined.drop_duplicates(subset=["ticker"], keep="first")
-    return combined.sort_values("adv", ascending=False).head(CFG.universe_size).reset_index(drop=True)
+    combined = combined.sort_values("adv", ascending=False).head(CFG.universe_size + 20).reset_index(drop=True)
+    if len(combined) < min(150, CFG.universe_size):
+        raise RuntimeError(f"KOSPI universe is too small to publish: {len(combined)}/{CFG.universe_size}")
+    return combined
 
 
 def download_ohlcv(tickers: List[str], start: str, end: str, client: KisClient) -> Dict[str, pd.DataFrame]:
@@ -333,8 +326,11 @@ def run(end_date: str) -> dict:
     client = KisClient()
     effective_end_date = resolve_latest_trading_date(end_date)
     selected = fetch_top_by_current_value(client)
-    selected = filter_official_listing(selected, "KOSPI")
-    sectors = complete_domestic_sectors(selected["ticker"].tolist(), {}, client)
+    selected = filter_official_listing(selected, "KOSPI").head(CFG.universe_size).reset_index(drop=True)
+    if len(selected) < min(150, CFG.universe_size):
+        raise RuntimeError(f"KOSPI official listing is too small to publish: {len(selected)}/{CFG.universe_size}")
+    sectors = fetch_kind_sectors("KOSPI")
+    sectors = complete_domestic_sectors(selected["ticker"].tolist(), sectors, client)
     if len(sectors) < len(selected) * 0.8:
         sectors = {**fetch_krx_sectors(effective_end_date, "KOSPI"), **sectors}
     tickers = selected["ticker"].tolist()

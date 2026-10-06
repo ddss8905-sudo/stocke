@@ -66,6 +66,8 @@ KIS_APP_SECRET
 KIS_BASE_URL
 ```
 
+The KOSPI universe comes from Naver's KRX trading-value list, is checked against the KRX KIND ordinary-share listing, and is capped at 200 symbols. KIS supplies historical prices. A run with fewer than 150 verified symbols fails instead of publishing an incomplete screen.
+
 Before using `KOSPI_API`, run `db/migrations/001_add_kospi_api_market.sql` in Supabase SQL Editor so the existing market check constraints accept the new market value.
 
 ## Risk and regime filters
