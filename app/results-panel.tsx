@@ -35,7 +35,7 @@ function tradingViewSymbol(market: Market, ticker: string) {
 
 type ChartCandle = { time: string; open: number; high: number; low: number; close: number; volume: number };
 
-function DomesticChart({ market, ticker }: { market: Market; ticker: string }) {
+function DomesticChart({ market, ticker, runId, onSource }: { market: Market; ticker: string; runId: string | null; onSource: (source: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [candles, setCandles] = useState<ChartCandle[] | null>(null);
   const [error, setError] = useState(false);
@@ -44,16 +44,20 @@ function DomesticChart({ market, ticker }: { market: Market; ticker: string }) {
     const controller = new AbortController();
     setCandles(null);
     setError(false);
-    fetch(`/api/chart?market=${market}&ticker=${encodeURIComponent(ticker)}`, { signal: controller.signal })
+    onSource("");
+    const params = new URLSearchParams({ market, ticker });
+    if (runId) params.set("run", runId);
+    fetch(`/api/chart?${params}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Chart request failed");
-        const data = await response.json() as { candles: ChartCandle[] };
+        const data = await response.json() as { candles: ChartCandle[]; source: string };
         if (!data.candles.length) throw new Error("Empty chart");
         setCandles(data.candles);
+        onSource(data.source);
       })
       .catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, [market, ticker]);
+  }, [market, ticker, runId, onSource]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -92,9 +96,10 @@ function DomesticChart({ market, ticker }: { market: Market; ticker: string }) {
   </div>;
 }
 
-function ChartDialog({ row, market, onClose }: { row: ScreeningResult; market: Market; onClose: () => void }) {
+function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; market: Market; runId: string | null; onClose: () => void }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const [chartSource, setChartSource] = useState("");
   const symbol = tradingViewSymbol(market, row.ticker);
   const chartUrl = market === "NASDAQ"
     ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`
@@ -150,7 +155,7 @@ function ChartDialog({ row, market, onClose }: { row: ScreeningResult; market: M
           <button ref={closeRef} className="iconButton" type="button" onClick={onClose} aria-label="차트 닫기" title="차트 닫기"><X size={20} /></button>
         </div>
         <div className="chartBody">
-          {market === "NASDAQ" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} />}
+          {market === "NASDAQ" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} runId={runId} onSource={setChartSource} />}
           <div className="chartDetails">
             <span>종가 <strong>{number(row.close, 0)}</strong></span>
             <span>매수 구간 <strong>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, 0)}–${number(row.buy_zone_high, 0)}`}</strong></span>
@@ -159,7 +164,7 @@ function ChartDialog({ row, market, onClose }: { row: ScreeningResult; market: M
             <a href={chartUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> 외부 차트</a>
           </div>
         </div>
-        <div className="chartAttribution">{market === "NASDAQ" ? "Chart by " : "Prices: Yahoo Finance · Chart by "}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
+        <div className="chartAttribution">{market === "NASDAQ" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
       </div>
     </div>
   );
@@ -198,7 +203,7 @@ function ResultTable({ rows, compact, onOpen }: { rows: ScreeningResult[]; compa
   );
 }
 
-export function ResultsPanel({ market, candidates, scored, sectors }: { market: Market; candidates: ScreeningResult[]; scored: ScreeningResult[]; sectors: SectorStrength[] }) {
+export function ResultsPanel({ market, runId, candidates, scored, sectors }: { market: Market; runId: string | null; candidates: ScreeningResult[]; scored: ScreeningResult[]; sectors: SectorStrength[] }) {
   const [period, setPeriod] = useState<Period>(5);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
   const [chartRow, setChartRow] = useState<ScreeningResult | null>(null);
@@ -206,6 +211,8 @@ export function ResultsPanel({ market, candidates, scored, sectors }: { market: 
   const sectorReturns = new Map(sectors.map((sector) => [`${sector.sector_name}:${sector.period_days}`, sector.sector_return]));
   const visibleCandidates = selectedSector ? candidates.filter((row) => row.sector_name === selectedSector) : candidates;
   const visibleScored = selectedSector ? scored.filter((row) => row.sector_name === selectedSector) : scored;
+  const highScore = market === "KOSPI_API" ? scored.filter((row) => (row.final_score ?? 0) >= 80) : [];
+  const compactBase = highScore.filter((row) => row.base_depth_pct != null && row.base_depth_pct <= 0.45);
 
   return <>
     <section className="section">
@@ -226,7 +233,7 @@ export function ResultsPanel({ market, candidates, scored, sectors }: { market: 
     </section>
 
     <section className="section">
-      <div className="sectionHead"><div><h2>Candidate List{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>후보 종목을 누르면 차트가 열립니다.</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
+      <div className="sectionHead"><div><h2>Candidate List{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>{market === "KOSPI_API" ? `${scored.length}종목 분석 · 80점 이상 ${highScore.length} · 박스폭 45% 이하 ${compactBase.length} · 최종 후보 ${candidates.length}` : "후보 종목을 누르면 차트가 열립니다."}</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
       <ResultTable rows={visibleCandidates} onOpen={setChartRow} />
     </section>
 
@@ -234,7 +241,7 @@ export function ResultsPanel({ market, candidates, scored, sectors }: { market: 
       <div className="sectionHead"><div><h2>Full Scoreboard</h2><p>현재 분석 대상의 상위 200종목</p></div></div>
       <ResultTable rows={visibleScored} compact onOpen={setChartRow} />
     </section>
-    {chartRow && <ChartDialog row={chartRow} market={market} onClose={() => setChartRow(null)} />}
+    {chartRow && <ChartDialog row={chartRow} market={market} runId={runId} onClose={() => setChartRow(null)} />}
   </>;
 }
 

@@ -172,6 +172,39 @@ def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
     response.raise_for_status()
 
 
+def chart_candles(histories: Dict[str, pd.DataFrame]) -> Dict[str, list]:
+    return {
+        ticker: [
+            {
+                "time": index.isoformat(),
+                "open": float(row.open),
+                "high": float(row.high),
+                "low": float(row.low),
+                "close": float(row.close),
+                "volume": float(row.volume),
+            }
+            for index, row in history.tail(130).iterrows()
+        ]
+        for ticker, history in histories.items()
+    }
+
+
+def upload_chart_snapshot(histories: Dict[str, pd.DataFrame], market: str, run_id: str) -> None:
+    if not histories:
+        return
+    base = os.environ["SUPABASE_URL"].rstrip("/") + "/storage/v1"
+    headers = supabase_headers()
+    body = json.dumps(chart_candles(histories), separators=(",", ":")).encode("utf-8")
+    response = requests.post(
+        f"{base}/object/stocke-sector-strength/{market}/{run_id}-charts.json",
+        headers={**headers, "Content-Type": "application/json"},
+        data=body,
+        timeout=60,
+    )
+    response.raise_for_status()
+    print(f"[INFO] uploaded KIS chart snapshot: {len(histories)} stocks, {len(body)} bytes")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--market", choices=sorted(RUNNERS), required=True)
@@ -205,6 +238,7 @@ def main() -> None:
         print("[INFO] uploaded to Supabase")
         upload_sector_snapshot(payload, run_id)
         print("[INFO] uploaded sector snapshot")
+        upload_chart_snapshot(result.get("chart_histories", {}), payload["market"], run_id)
     else:
         print("[INFO] Supabase env vars are missing; skipped upload")
 

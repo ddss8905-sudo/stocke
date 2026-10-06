@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "jobs"))
 
 from screeners import kospi_api
+from run_market import chart_candles
 
 
 def stock(ticker, market="KOSPI", value="10000000000", name="Company"):
@@ -22,6 +24,19 @@ def stock(ticker, market="KOSPI", value="10000000000", name="Company"):
 
 
 class KospiUniverseTests(unittest.TestCase):
+    def test_chart_snapshot_preserves_screening_close_and_dates(self):
+        history = pd.DataFrame({
+            "open": [100.0, 110.0],
+            "high": [112.0, 120.0],
+            "low": [98.0, 108.0],
+            "close": [109.0, 117.0],
+            "volume": [1000.0, 1200.0],
+        }, index=[date(2026, 10, 2), date(2026, 10, 6)])
+        candles = chart_candles({"005930": history})["005930"]
+        self.assertEqual(candles[-1]["time"], "2026-10-06")
+        self.assertEqual(candles[-1]["close"], 117.0)
+        self.assertEqual(len(candles), 2)
+
     def test_naver_listing_paginates_and_keeps_only_kospi(self):
         responses = []
         for payload in (

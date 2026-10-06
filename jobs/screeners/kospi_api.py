@@ -395,6 +395,7 @@ def run(end_date: str) -> dict:
         "scored": scored,
         "candidates": candidates,
         "sector_strength": sector_strength,
+        "chart_histories": {ticker: ohlcv[ticker] for ticker in scored["ticker"]} if not scored.empty else {},
         "market_bullish": market_regime["market_bullish"],
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],

@@ -9,11 +9,40 @@ type YahooChart = {
   };
 };
 
+type Candle = { time: string; open: number; high: number; low: number; close: number; volume: number };
+
+async function kisCandles(market: string, runId: string, ticker: string): Promise<Candle[] | null> {
+  const base = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !key) return null;
+  const url = `${base.replace(/\/$/, "")}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${runId}-charts.json`;
+  const response = await fetch(url, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+    cache: "no-store",
+  });
+  if (!response.ok) return null;
+  const histories = await response.json() as Record<string, Candle[]>;
+  return histories[ticker] ?? null;
+}
+
 export async function GET(request: NextRequest) {
   const market = request.nextUrl.searchParams.get("market");
   const ticker = request.nextUrl.searchParams.get("ticker");
+  const runId = request.nextUrl.searchParams.get("run");
   if ((market !== "KOSDAQ" && market !== "KOSPI_API") || !ticker || !/^\d{6}$/.test(ticker)) {
     return NextResponse.json({ error: "잘못된 종목 코드입니다." }, { status: 400 });
+  }
+  if (runId && !/^[0-9a-f-]{36}$/i.test(runId)) {
+    return NextResponse.json({ error: "잘못된 실행 ID입니다." }, { status: 400 });
+  }
+
+  if (market === "KOSPI_API" && runId) {
+    try {
+      const candles = await kisCandles(market, runId, ticker);
+      if (candles?.length) return NextResponse.json({ candles, source: "KIS" });
+    } catch (error) {
+      console.error("KIS chart snapshot request failed", market, ticker, error);
+    }
   }
 
   const suffix = market === "KOSDAQ" ? "KQ" : "KS";
@@ -48,7 +77,7 @@ export async function GET(request: NextRequest) {
       }];
     });
     if (!candles.length) throw new Error("No valid candles");
-    return NextResponse.json({ candles });
+    return NextResponse.json({ candles, source: "Yahoo Finance" });
   } catch (error) {
     console.error("Chart request failed", market, ticker, error);
     return NextResponse.json({ error: "가격 차트를 불러오지 못했습니다." }, { status: 502 });

@@ -112,7 +112,7 @@ export default async function Page({ searchParams }: PageProps) {
         <RunButtons market={market} />
       </section>
 
-      <ResultsPanel market={market} candidates={data.candidates} scored={data.scored} sectors={data.sectors} />
+      <ResultsPanel market={market} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={data.sectors} />
     </main>
   );
 }
