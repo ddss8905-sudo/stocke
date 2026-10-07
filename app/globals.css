@@ -613,4 +613,7 @@ tr:last-child td {
 .ma10Key { background: #218773; }
 .ma30Key { background: #c69429; }
 .ma40Key { background: #596879; }
+@media (max-width: 560px) {
+  .timeframeTabs { flex-basis: 100%; margin-left: 0; padding-left: 0; border-left: 0; }
+}
 .reversalCaution { margin: 16px 0 0; color: #686d73; font-size: 13px; line-height: 1.6; }

@@ -203,7 +203,7 @@ function ChartDialog({ row, market, runId, timeframe, onClose }: { row: Screenin
   );
 }
 
-function ResultTable({ rows, compact, onOpen }: { rows: ScreeningResult[]; compact?: boolean; onOpen: (row: ScreeningResult) => void }) {
+function ResultTable({ rows, compact, digits = 0, onOpen }: { rows: ScreeningResult[]; compact?: boolean; digits?: number; onOpen: (row: ScreeningResult) => void }) {
   return (
     <div className="tableWrap">
       <table>
@@ -222,10 +222,10 @@ function ResultTable({ rows, compact, onOpen }: { rows: ScreeningResult[]; compa
               {!compact && <td>{row.entry_setup === "breakout" ? "Breakout" : row.entry_setup === "risk_watch" ? "Risk watch" : row.entry_setup === "extended_watch" ? "Extended" : "Watch"}</td>}
               <td className="nameCell"><button className="chartLink" type="button" onClick={() => onOpen(row)}>{row.security_name || "-"}</button></td>
               <td>{row.sector_name || "-"}</td>
-              <td>{number(row.close, 0)}</td><td className="strong">{number(row.final_score)}</td><td>{number(row.rs_rank)}</td><td>{number(row.trend_score)}</td>
+              <td>{number(row.close, digits)}</td><td className="strong">{number(row.final_score)}</td><td>{number(row.rs_rank)}</td><td>{number(row.trend_score)}</td>
               {compact ? <><td>{number(row.breakout_score)}</td><td>{number(row.adv20, 0)}</td></> : <>
-                <td>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, 0)}–${number(row.buy_zone_high, 0)}`}</td>
-                <td>{percent(row.risk_to_stop)}</td><td title={row.exit_plan ?? undefined}>{number(row.initial_stop_price ?? row.stop_price, 0)}</td><td>{number(row.two_r_price, 0)}</td><td>{percent(row.position_size_pct)}</td>
+                <td>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, digits)}–${number(row.buy_zone_high, digits)}`}</td>
+                <td>{percent(row.risk_to_stop)}</td><td title={row.exit_plan ?? undefined}>{number(row.initial_stop_price ?? row.stop_price, digits)}</td><td>{number(row.two_r_price, digits)}</td><td>{percent(row.position_size_pct)}</td>
               </>}
             </tr>
           ))}
@@ -289,12 +289,12 @@ export function ResultsPanel({ market, strategy, timeframe, weeklyAnalysis, runI
     </section> : <>
     <section className="section">
       <div className="sectionHead"><div><h2>Candidate List · {timeframe === "weekly" ? "주봉" : "일봉"}{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>{timeframe === "weekly" ? weeklyAnalysis ? `${weeklyAnalysis.as_of} · ${scored.length}종목 분석 · 후보 ${candidates.length}` : "주봉 분석 미실행 또는 결과를 불러오지 못한 상태입니다." : market === "KOSPI_API" ? `${scored.length}종목 분석 · 80점 이상 ${highScore.length} · 박스폭 45% 이하 ${compactBase.length} · 최종 후보 ${candidates.length}` : "후보 종목을 누르면 차트가 열립니다."}</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
-      {(timeframe === "daily" || weeklyAnalysis) && <ResultTable rows={visibleCandidates} onOpen={setChartRow} />}
+      {(timeframe === "daily" || weeklyAnalysis) && <ResultTable rows={visibleCandidates} digits={timeframe === "weekly" && market === "NASDAQ" ? 2 : 0} onOpen={setChartRow} />}
     </section>
 
     {(timeframe === "daily" || weeklyAnalysis) && <section className="section">
       <div className="sectionHead"><div><h2>Full Scoreboard</h2><p>점수화된 {scored.length}종목</p></div></div>
-      <ResultTable rows={visibleScored} compact onOpen={setChartRow} />
+      <ResultTable rows={visibleScored} compact digits={timeframe === "weekly" && market === "NASDAQ" ? 2 : 0} onOpen={setChartRow} />
     </section>}
     </>}
     {chartRow && <ChartDialog row={chartRow} market={market} runId={runId} timeframe={timeframe} onClose={closeChart} />}

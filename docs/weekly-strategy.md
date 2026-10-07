@@ -19,6 +19,10 @@ profitability backtest. This is a research screen, not an automatic trading syst
 - Reject invalid/duplicate daily bars. Discard the first potentially partial input
   week. Use the last 504 completed daily bars and require 56 weekly bars. Fetching
   800 calendar days supports these windows; it does not support a 200-week average.
+- Korean adjusted integer OHLC can put a high/low one won inside the open/close.
+  Widen only such <=1 KRW rounding discrepancies, preserving open/close. Larger
+  discrepancies and inverted high/low ranges are rejected. US prices get no such
+  tolerance. This weekly-only normalization is included in the chart snapshots.
 - Liquidity is the daily 20-session average trading value through the completed
   week's price date, NOT mean weekly trading value. The same currency/thresholds
   as daily screening apply. Weekly ATR14 uses 14 actual weekly ranges; reject

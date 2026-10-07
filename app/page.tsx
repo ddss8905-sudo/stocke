@@ -78,7 +78,7 @@ export default async function Page({ searchParams }: PageProps) {
   const sectors = weekly ? data.weekly?.sectors ?? [] : strategy === "reversal" ? data.reversalSectors : data.sectors;
   const regimeScore = weekly || strategy === "reversal" ? analysis?.regime_score : data.run?.market_regime_score;
   const latestRun = dateTime(data.run?.finished_at) || data.run?.run_date || "-";
-  const regimeValue = data.run
+  const regimeValue = data.run && regimeScore != null
     ? `${regimeLabel(regimeScore)} ${number(regimeScore, 0)}`
     : "-";
   const regimeTradable = Number(weekly || strategy === "reversal" ? analysis?.exposure : data.run?.market_exposure ?? 0) > 0;

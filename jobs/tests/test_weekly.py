@@ -131,11 +131,17 @@ class WeeklyTests(unittest.TestCase):
         cfg = replace(CFG, max_atr_pct=.20)
         row = analyze_reversal("TEST", "Test", frame, cfg, 80, periods=WEEKLY_PERIODS)
         self.assertIsNotNone(row)
+        self.assertTrue(row["entry_trigger"])
+        self.assertEqual(row["reversal_status"], "confirmed")
         self.assertEqual(row["timeframe"], "weekly")
         self.assertGreaterEqual(row["downtrend_bars"], 25)
         self.assertEqual(row["as_of"], "2026-10-02")
         self.assertEqual(row["volume_ratio"], 2.)
         self.assertIsNone(analyze_reversal("TEST", "Test", frame, cfg, 80))
+        off = analyze_reversal("TEST", "Test", frame, cfg, 0, periods=WEEKLY_PERIODS)
+        self.assertEqual(off["reversal_status"], "market_wait")
+        self.assertFalse(off["entry_trigger"])
+        self.assertEqual(off["position_size_pct"], 0)
         before = descending_resistance(frame, WEEKLY_PERIODS)
         frame.iloc[-1, frame.columns.get_loc("high")] *= 5
         self.assertEqual(before[:3], descending_resistance(frame, WEEKLY_PERIODS)[:3])
@@ -177,6 +183,17 @@ class WeeklyTests(unittest.TestCase):
         self.assertTrue(weekly_history(broken, pd.Timestamp("2026-10-02")).empty)
         result, _ = build_weekly(pd.DataFrame(columns=["ticker"]), {"QQQ": frame.tail(100)}, CFG, {})
         self.assertIsNone(result)
+
+    def test_only_tiny_domestic_adjustment_rounding_is_repaired(self):
+        frame = daily_history()
+        close = frame.close.iloc[-10]
+        frame.iloc[-10, frame.columns.get_loc("high")] = close - .1
+        self.assertTrue(weekly_history(frame, pd.Timestamp("2026-10-02")).empty)
+        repaired = weekly_history(frame, pd.Timestamp("2026-10-02"), 1.0)
+        self.assertFalse(repaired.empty)
+        self.assertEqual(repaired.iloc[-1].close, frame.close.iloc[-1])
+        frame.iloc[-10, frame.columns.get_loc("high")] = close - 5
+        self.assertTrue(weekly_history(frame, pd.Timestamp("2026-10-02"), 1.0).empty)
 
 
 if __name__ == "__main__":

@@ -22,11 +22,20 @@ def completed_week_end(market: str, now: Optional[pd.Timestamp] = None) -> pd.Ti
     return friday
 
 
-def weekly_history(history: pd.DataFrame, week_end: pd.Timestamp) -> pd.DataFrame:
+def weekly_history(history: pd.DataFrame, week_end: pd.Timestamp, rounding_tolerance: float = 0.0) -> pd.DataFrame:
     history = history.copy()
     history.index = pd.to_datetime(history.index, errors="coerce")
     if history.index.isna().any():
         return pd.DataFrame()
+    if rounding_tolerance > 0 and all(column in history for column in ("open", "high", "low", "close")):
+        prices = history[["open", "high", "low", "close"]].apply(pd.to_numeric, errors="coerce")
+        high_bound, low_bound = prices[["open", "close"]].max(axis=1), prices[["open", "close"]].min(axis=1)
+        # Adjusted Korean integer quotes can round a high one won below the close.
+        # Preserve open/close; widen only these tiny ranges, never repair larger errors.
+        high_rounding = (high_bound - prices.high).between(0, rounding_tolerance) & (prices.high >= prices.low)
+        low_rounding = (prices.low - low_bound).between(0, rounding_tolerance) & (prices.high >= prices.low)
+        history.loc[high_rounding, "high"] = high_bound[high_rounding]
+        history.loc[low_rounding, "low"] = low_bound[low_rounding]
     # Trim before the history cap so new intraweek bars cannot shift old anchors.
     daily = clean_history(history.loc[history.index <= week_end])
     if daily.empty:
@@ -143,7 +152,8 @@ def build_weekly(selected: pd.DataFrame, histories: Dict[str, pd.DataFrame], cfg
         timezone = "America/New_York" if cfg.market == "NASDAQ" else "Asia/Seoul"
         requested = pd.Timestamp(requested_date, tz=timezone) + pd.Timedelta(hours=23, minutes=59)
         end = min(end, completed_week_end(cfg.market, requested))
-    weekly = {ticker: weekly_history(history, end) for ticker, history in histories.items()}
+    tolerance = 0.0 if cfg.market == "NASDAQ" else 1.0
+    weekly = {ticker: weekly_history(history, end, tolerance) for ticker, history in histories.items()}
     benchmark = weekly.get(cfg.benchmark_tickers[0], pd.DataFrame())
     if benchmark.empty or len(benchmark) < 56:
         return None, {}
