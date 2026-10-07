@@ -28,7 +28,7 @@ EXCLUDE_NAME_KEYWORDS = [
 
 CFG = MarketConfig(
     market="KOSPI_API",
-    lookback_days=420,
+    lookback_days=800,
     universe_size=200,
     min_price=1_000.0,
     min_adv20=5_000_000_000.0,
@@ -395,9 +395,10 @@ def run(end_date: str) -> dict:
         "scored": scored,
         "candidates": candidates,
         "sector_strength": sector_strength,
-        "chart_histories": {ticker: ohlcv[ticker] for ticker in scored["ticker"]} if not scored.empty else {},
+        "reversal_histories": ohlcv,
+        "reversal_sectors": sectors,
+        "chart_histories": {ticker: ohlcv[ticker] for ticker in tickers if ticker in ohlcv},
         "market_bullish": market_regime["market_bullish"],
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],
     }
-

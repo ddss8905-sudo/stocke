@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { Activity, ArrowDownRight, ArrowUpRight, Clock, Database, Filter } from "lucide-react";
 import { getDashboardData } from "@/lib/data";
-import type { Market } from "@/lib/types";
+import type { Market, Strategy } from "@/lib/types";
 import { RunButtons } from "./run-buttons";
 import { ResultsPanel } from "./results-panel";
 
 type PageProps = {
-  searchParams?: Promise<{ market?: string }>;
+  searchParams?: Promise<{ market?: string; strategy?: string }>;
 };
 
 const markets: Market[] = ["NASDAQ", "KOSDAQ", "KOSPI_API"];
@@ -40,11 +40,11 @@ function dateTime(value: string | null | undefined) {
   }).format(new Date(value));
 }
 
-function MarketTabs({ active }: { active: Market }) {
+function MarketTabs({ active, strategy }: { active: Market; strategy: Strategy }) {
   return (
     <div className="tabs" aria-label="Market selector">
       {markets.map((market) => (
-        <a className={market === active ? "tab active" : "tab"} href={`/?market=${market}`} key={market}>
+        <a className={market === active ? "tab active" : "tab"} href={`/?market=${market}&strategy=${strategy}`} key={market}>
           {market}
         </a>
       ))}
@@ -67,6 +67,7 @@ function Stat({ label, value, icon }: { label: string; value: string; icon: Reac
 export default async function Page({ searchParams }: PageProps) {
   const params = await searchParams;
   const market = asMarket(params?.market);
+  const strategy: Strategy = params?.strategy === "reversal" ? "reversal" : "trend";
   const data = await getDashboardData(market);
   const latestRun = dateTime(data.run?.finished_at) || data.run?.run_date || "-";
   const regimeValue = data.run
@@ -78,10 +79,10 @@ export default async function Page({ searchParams }: PageProps) {
     <main>
       <section className="topbar">
         <div>
-          <p className="eyebrow">Trend Following Screener</p>
+          <p className="eyebrow">Trend & Reversal Screener</p>
           <h1>Market Screener</h1>
         </div>
-        <MarketTabs active={market} />
+        <MarketTabs active={market} strategy={strategy} />
       </section>
 
       {data.usingSampleData && (
@@ -94,7 +95,7 @@ export default async function Page({ searchParams }: PageProps) {
         <Stat label="Market" value={market} icon={<Database size={18} />} />
         <Stat label="Latest run" value={latestRun} icon={<Clock size={18} />} />
         <Stat label="Run mode" value={market === "KOSPI_API" ? "KIS API" : "On demand"} icon={<Activity size={18} />} />
-        <Stat label="Candidates" value={String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
+        <Stat label="Candidates" value={strategy === "reversal" ? data.reversalAnalysis ? String(data.reversals.length) : "-" : String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
         <Stat
           label="Regime"
           value={regimeValue}
@@ -109,11 +110,14 @@ export default async function Page({ searchParams }: PageProps) {
             <p>Trigger the selected market workflow in GitHub Actions, then refresh after it completes.</p>
           </div>
         </div>
-        <RunButtons market={market} />
+        <RunButtons market={market} strategy={strategy} />
       </section>
 
-      <ResultsPanel market={market} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={data.sectors} />
+      <nav className="strategyTabs" aria-label="스크리닝 전략">
+        <a aria-current={strategy === "trend" ? "page" : undefined} className={strategy === "trend" ? "tab active" : "tab"} href={`/?market=${market}&strategy=trend`}>추세추종</a>
+        <a aria-current={strategy === "reversal" ? "page" : undefined} className={strategy === "reversal" ? "tab active" : "tab"} href={`/?market=${market}&strategy=reversal`}>저점 반등</a>
+      </nav>
+      <ResultsPanel key={`${market}-${strategy}-${data.run?.id}`} market={market} strategy={strategy} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={data.sectors} reversals={data.reversals} reversalAnalysis={data.reversalAnalysis} />
     </main>
   );
 }
-

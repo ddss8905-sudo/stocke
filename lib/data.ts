@@ -25,6 +25,8 @@ function sampleDashboardData(market: Market): DashboardData {
     candidates: sampleRows[market],
     scored: sampleRows[market],
     sectors: [],
+    reversals: [],
+    reversalAnalysis: null,
     usingSampleData: true,
   };
 }
@@ -83,7 +85,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     );
     const run = runs[0] ?? null;
     if (!run) {
-      return { market, run: null, candidates: [], scored: [], sectors: [], usingSampleData: false };
+      return { market, run: null, candidates: [], scored: [], sectors: [], reversals: [], reversalAnalysis: null, usingSampleData: false };
     }
 
     const base = `screening_results?run_id=eq.${run.id}`;
@@ -96,6 +98,8 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
 
     let sectors = [] as DashboardData["sectors"];
     let members: Record<string, string> = {};
+    let reversals: ScreeningResult[] = [];
+    let reversalAnalysis: DashboardData["reversalAnalysis"] = null;
     try {
       const response = await fetch(
         `${supabaseBaseUrl()}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${run.id}.json`,
@@ -107,10 +111,16 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
           market: Market;
           sectors: DashboardData["sectors"];
           members: Record<string, string>;
+          reversals?: ScreeningResult[];
+          reversal_analysis?: DashboardData["reversalAnalysis"];
         };
         if (snapshot.run_id === run.id && snapshot.market === market) {
           sectors = snapshot.sectors;
           members = snapshot.members;
+          if (snapshot.reversal_analysis?.version === 1 && Array.isArray(snapshot.reversals)) {
+            reversals = snapshot.reversals;
+            reversalAnalysis = snapshot.reversal_analysis;
+          }
         }
       } else if (response.status !== 404) {
         throw new Error(`Sector snapshot request failed: ${response.status}`);
@@ -120,7 +130,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     }
 
     const withSector = (row: ScreeningResult) => ({ ...row, sector_name: members[row.ticker] ?? null });
-    return { market, run, candidates: candidates.map(withSector), scored: scored.map(withSector), sectors, usingSampleData: false };
+    return { market, run, candidates: candidates.map(withSector), scored: scored.map(withSector), sectors, reversals, reversalAnalysis, usingSampleData: false };
   } catch (error) {
     console.error("[supabase] dashboard data fetch failed", {
       market,
@@ -131,4 +141,3 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     return sampleDashboardData(market);
   }
 }
-

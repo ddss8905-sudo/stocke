@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 
 from screeners import kosdaq, kospi_api, nasdaq
+from screeners.reversal import build_reversals
 
 
 RUNNERS = {
@@ -158,6 +159,8 @@ def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
         "run_id": run_id,
         "run_date": payload["run_date"],
         "sectors": payload.get("sector_strength", []),
+        "reversals": payload.get("reversals", []),
+        "reversal_analysis": payload.get("reversal_analysis"),
         "members": {
             row["ticker"]: row.get("sector_name")
             for row in payload["scored"] if row.get("sector_name")
@@ -176,14 +179,14 @@ def chart_candles(histories: Dict[str, pd.DataFrame]) -> Dict[str, list]:
     return {
         ticker: [
             {
-                "time": index.isoformat(),
+                "time": index.strftime("%Y-%m-%d"),
                 "open": float(row.open),
                 "high": float(row.high),
                 "low": float(row.low),
                 "close": float(row.close),
                 "volume": float(row.volume),
             }
-            for index, row in history.tail(130).iterrows()
+            for index, row in history.tail(504).iterrows()
         ]
         for ticker, history in histories.items()
     }
@@ -202,7 +205,7 @@ def upload_chart_snapshot(histories: Dict[str, pd.DataFrame], market: str, run_i
         timeout=60,
     )
     response.raise_for_status()
-    print(f"[INFO] uploaded KIS chart snapshot: {len(histories)} stocks, {len(body)} bytes")
+    print(f"[INFO] uploaded chart snapshot: {len(histories)} stocks, {len(body)} bytes")
 
 
 def main() -> None:
@@ -214,6 +217,15 @@ def main() -> None:
 
     started_at = datetime.now(timezone.utc).isoformat()
     result = RUNNERS[args.market](args.date)
+    module = {"NASDAQ": nasdaq, "KOSDAQ": kosdaq, "KOSPI_API": kospi_api}[args.market]
+    histories = result.get("reversal_histories", {})
+    benchmark = histories.get(module.CFG.benchmark_tickers[0])
+    as_of = benchmark.index[-1].strftime("%Y-%m-%d") if benchmark is not None and not benchmark.empty else result["run_date"]
+    reversals, scanned = build_reversals(
+        result["selected"], histories, module.CFG, result.get("market_regime_score", 0),
+        result.get("reversal_sectors", {}), result.get("sector_strength", pd.DataFrame()), as_of,
+    )
+    print(f"[INFO] reversal analysis: {scanned} scanned, {len(reversals)} setups, as_of={as_of}")
     finished_at = datetime.now(timezone.utc).isoformat()
 
     payload = {
@@ -226,6 +238,8 @@ def main() -> None:
         "scored": records(result["scored"]),
         "candidates": records(result["candidates"]),
         "sector_strength": records(result.get("sector_strength", pd.DataFrame())),
+        "reversals": records(reversals),
+        "reversal_analysis": {"version": 1, "scanned_count": scanned, "as_of": as_of},
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -238,11 +252,13 @@ def main() -> None:
         print("[INFO] uploaded to Supabase")
         upload_sector_snapshot(payload, run_id)
         print("[INFO] uploaded sector snapshot")
-        upload_chart_snapshot(result.get("chart_histories", {}), payload["market"], run_id)
+        charts = result.get("chart_histories", {})
+        if payload["market"] == "NASDAQ":
+            charts = {row["ticker"]: charts[row["ticker"]] for row in payload["reversals"] if row["ticker"] in charts}
+        upload_chart_snapshot(charts, payload["market"], run_id)
     else:
         print("[INFO] Supabase env vars are missing; skipped upload")
 
 
 if __name__ == "__main__":
     main()
-

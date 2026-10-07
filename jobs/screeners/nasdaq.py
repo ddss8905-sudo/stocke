@@ -29,7 +29,7 @@ LIQUIDITY_PREFILTER_SIZE = 1000
 
 CFG = MarketConfig(
     market="NASDAQ",
-    lookback_days=420,
+    lookback_days=800,
     universe_size=500,
     min_price=10.0,
     min_adv20=20_000_000.0,
@@ -277,8 +277,10 @@ def run(end_date: str) -> dict:
         "scored": scored,
         "candidates": candidates,
         "sector_strength": sector_strength,
+        "reversal_histories": ohlcv,
+        "chart_histories": {ticker: ohlcv[ticker] for ticker in tickers if ticker in ohlcv},
+        "reversal_sectors": sectors,
         "market_bullish": market_regime["market_bullish"],
         "market_regime_score": market_regime["score"],
         "market_exposure": market_regime["exposure"],
     }
-

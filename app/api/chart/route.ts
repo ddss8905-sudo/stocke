@@ -11,7 +11,7 @@ type YahooChart = {
 
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume: number };
 
-async function kisCandles(market: string, runId: string, ticker: string): Promise<Candle[] | null> {
+async function snapshotCandles(market: string, runId: string, ticker: string): Promise<Candle[] | null> {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!base || !key) return null;
@@ -29,24 +29,25 @@ export async function GET(request: NextRequest) {
   const market = request.nextUrl.searchParams.get("market");
   const ticker = request.nextUrl.searchParams.get("ticker");
   const runId = request.nextUrl.searchParams.get("run");
-  if ((market !== "KOSDAQ" && market !== "KOSPI_API") || !ticker || !/^\d{6}$/.test(ticker)) {
+  if ((market !== "NASDAQ" && market !== "KOSDAQ" && market !== "KOSPI_API") || !ticker || !(market === "NASDAQ" ? /^[A-Z][A-Z0-9.-]{0,9}$/.test(ticker) : /^\d{6}$/.test(ticker))) {
     return NextResponse.json({ error: "잘못된 종목 코드입니다." }, { status: 400 });
   }
   if (runId && !/^[0-9a-f-]{36}$/i.test(runId)) {
     return NextResponse.json({ error: "잘못된 실행 ID입니다." }, { status: 400 });
   }
 
-  if (market === "KOSPI_API" && runId) {
+  if (runId) {
     try {
-      const candles = await kisCandles(market, runId, ticker);
-      if (candles?.length) return NextResponse.json({ candles, source: "KIS" });
+      const candles = await snapshotCandles(market, runId, ticker);
+      if (candles?.length) return NextResponse.json({ candles, source: market === "KOSPI_API" ? "KIS" : market === "KOSDAQ" ? "KRX" : "Yahoo Finance", snapshot: true });
     } catch (error) {
-      console.error("KIS chart snapshot request failed", market, ticker, error);
+      console.error("Chart snapshot request failed", market, ticker, error);
     }
   }
 
   const suffix = market === "KOSDAQ" ? "KQ" : "KS";
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}.${suffix}?range=6mo&interval=1d`;
+  const symbol = market === "NASDAQ" ? ticker : `${ticker}.${suffix}`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d`;
   try {
     const response = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 Stocke/1.0" },
@@ -59,7 +60,7 @@ export async function GET(request: NextRequest) {
     if (!result?.timestamp || !quote) throw new Error("No chart data");
 
     const dateFormatter = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+      timeZone: market === "NASDAQ" ? "America/New_York" : "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
     });
     const candles = result.timestamp.flatMap((timestamp, index) => {
       const open = quote.open?.[index];
@@ -83,4 +84,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "가격 차트를 불러오지 못했습니다." }, { status: 502 });
   }
 }
-

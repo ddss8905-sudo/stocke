@@ -2,14 +2,14 @@
 
 import { useState } from "react";
 import { Play, RefreshCw } from "lucide-react";
-import type { Market } from "@/lib/types";
+import type { Market, Strategy } from "@/lib/types";
 
 type RunState = {
   status: "idle" | "running" | "success" | "error";
   message: string;
 };
 
-export function RunButtons({ market }: { market: Market }) {
+export function RunButtons({ market, strategy }: { market: Market; strategy: Strategy }) {
   const [state, setState] = useState<RunState>({ status: "idle", message: "" });
 
   async function runNow() {
@@ -42,7 +42,7 @@ export function RunButtons({ market }: { market: Market }) {
         {state.status === "running" ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
         Run {market} now
       </button>
-      <a className="secondaryButton" href={`/?market=${market}`}>
+      <a className="secondaryButton" href={`/?market=${market}&strategy=${strategy}`}>
         <RefreshCw size={16} />
         Refresh latest
       </a>

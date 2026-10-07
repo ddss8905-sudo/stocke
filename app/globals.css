@@ -606,4 +606,5 @@ tr:last-child td {
     margin-left: 0;
   }
 }
-
+.strategyTabs { display: flex; gap: 8px; margin: 20px 0; flex-wrap: wrap; }
+.reversalCaution { margin: 16px 0 0; color: #686d73; font-size: 13px; line-height: 1.6; }

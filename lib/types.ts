@@ -1,4 +1,7 @@
 export type Market = "NASDAQ" | "KOSDAQ" | "KOSPI_API";
+export type Strategy = "trend" | "reversal";
+export type ReversalStatus = "preparing" | "confirmed" | "tracking" | "volume_wait" | "extended" | "risk_high" | "market_wait";
+export type ReversalAnalysis = { version: number; scanned_count: number; as_of: string };
 
 export type ScreeningRun = {
   id: string;
@@ -61,6 +64,16 @@ export type ScreeningResult = {
   exit_plan?: string | null;
   risk_to_stop: number | null;
   is_candidate: boolean;
+  strategy?: Strategy;
+  downtrend_days?: number;
+  decline_pct?: number;
+  rebound_pct?: number;
+  trendline_price?: number;
+  trendline_anchors?: { time: string; price: number }[];
+  volume_ratio?: number;
+  reversal_status?: ReversalStatus;
+  as_of?: string;
+  sector_score?: number | null;
 };
 
 export type SectorStrength = {
@@ -84,6 +97,7 @@ export type DashboardData = {
   candidates: ScreeningResult[];
   scored: ScreeningResult[];
   sectors: SectorStrength[];
+  reversals: ScreeningResult[];
+  reversalAnalysis: ReversalAnalysis | null;
   usingSampleData: boolean;
 };
-
