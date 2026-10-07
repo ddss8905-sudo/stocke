@@ -91,6 +91,10 @@ export default async function Page({ searchParams }: PageProps) {
         </div>
       )}
 
+      <nav className="strategyTabs" aria-label="스크리닝 전략">
+        <a aria-current={strategy === "trend" ? "page" : undefined} className={strategy === "trend" ? "tab active" : "tab"} href={`/?market=${market}&strategy=trend`}>추세추종</a>
+        <a aria-current={strategy === "reversal" ? "page" : undefined} className={strategy === "reversal" ? "tab active" : "tab"} href={`/?market=${market}&strategy=reversal`}>저점 반등</a>
+      </nav>
       <section className="stats">
         <Stat label="Market" value={market} icon={<Database size={18} />} />
         <Stat label="Latest run" value={latestRun} icon={<Clock size={18} />} />
@@ -113,10 +117,6 @@ export default async function Page({ searchParams }: PageProps) {
         <RunButtons market={market} strategy={strategy} />
       </section>
 
-      <nav className="strategyTabs" aria-label="스크리닝 전략">
-        <a aria-current={strategy === "trend" ? "page" : undefined} className={strategy === "trend" ? "tab active" : "tab"} href={`/?market=${market}&strategy=trend`}>추세추종</a>
-        <a aria-current={strategy === "reversal" ? "page" : undefined} className={strategy === "reversal" ? "tab active" : "tab"} href={`/?market=${market}&strategy=reversal`}>저점 반등</a>
-      </nav>
       <ResultsPanel key={`${market}-${strategy}-${data.run?.id}`} market={market} strategy={strategy} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={data.sectors} reversals={data.reversals} reversalAnalysis={data.reversalAnalysis} />
     </main>
   );
