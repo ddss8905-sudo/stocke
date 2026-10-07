@@ -615,5 +615,7 @@ tr:last-child td {
 .ma40Key { background: #596879; }
 @media (max-width: 560px) {
   .timeframeTabs { flex-basis: 100%; margin-left: 0; padding-left: 0; border-left: 0; }
+  .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tabs .tab { min-width: 0; padding: 10px 4px; font-size: 14px; }
 }
 .reversalCaution { margin: 16px 0 0; color: #686d73; font-size: 13px; line-height: 1.6; }
