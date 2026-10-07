@@ -11,11 +11,12 @@ type YahooChart = {
 
 type Candle = { time: string; open: number; high: number; low: number; close: number; volume: number };
 
-async function snapshotCandles(market: string, runId: string, ticker: string): Promise<Candle[] | null> {
+async function snapshotCandles(market: string, runId: string, ticker: string, weekly: boolean): Promise<Candle[] | null> {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!base || !key) return null;
-  const url = `${base.replace(/\/$/, "")}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${runId}-charts.json`;
+  const suffix = weekly ? "-weekly-charts" : "-charts";
+  const url = `${base.replace(/\/$/, "")}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${runId}${suffix}.json`;
   const response = await fetch(url, {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
     cache: "no-store",
@@ -30,6 +31,9 @@ export async function GET(request: NextRequest) {
   const ticker = request.nextUrl.searchParams.get("ticker");
   const runId = request.nextUrl.searchParams.get("run");
   const asOf = request.nextUrl.searchParams.get("asof");
+  const timeframe = request.nextUrl.searchParams.get("timeframe") ?? "daily";
+  if (timeframe !== "daily" && timeframe !== "weekly") return NextResponse.json({ error: "잘못된 봉 기준입니다." }, { status: 400 });
+  const weekly = timeframe === "weekly";
   if (asOf && !/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return NextResponse.json({ error: "잘못된 기준일입니다." }, { status: 400 });
   const throughDate = (candles: Candle[]) => asOf ? candles.filter((candle) => candle.time.slice(0, 10) <= asOf) : candles;
   if ((market !== "NASDAQ" && market !== "KOSDAQ" && market !== "KOSPI_API") || !ticker || !(market === "NASDAQ" ? /^[A-Z][A-Z0-9.-]{0,9}$/.test(ticker) : /^\d{6}$/.test(ticker))) {
@@ -41,12 +45,14 @@ export async function GET(request: NextRequest) {
 
   if (runId) {
     try {
-      const candles = await snapshotCandles(market, runId, ticker);
-      if (candles?.length) return NextResponse.json({ candles: throughDate(candles), source: market === "KOSPI_API" ? "KIS" : market === "KOSDAQ" ? "KRX" : "Yahoo Finance", snapshot: true });
+      const candles = await snapshotCandles(market, runId, ticker, weekly);
+      if (candles?.length) return NextResponse.json({ candles: throughDate(candles), source: market === "KOSPI_API" ? "KIS" : market === "KOSDAQ" ? "KRX" : "Yahoo Finance", snapshot: true, timeframe });
     } catch (error) {
       console.error("Chart snapshot request failed", market, ticker, error);
     }
   }
+  // Do not substitute live daily prices for the weekly screening snapshot.
+  if (weekly) return NextResponse.json({ error: "이 실행의 주봉 차트가 없습니다." }, { status: 404 });
 
   const suffix = market === "KOSDAQ" ? "KQ" : "KS";
   const symbol = market === "NASDAQ" ? ticker : `${ticker}.${suffix}`;

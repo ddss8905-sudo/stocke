@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CandlestickChart, ExternalLink, X } from "lucide-react";
 import { CandlestickSeries, ColorType, createChart, HistogramSeries, LineSeries } from "lightweight-charts";
 import type { CandlestickData, HistogramData, Time } from "lightweight-charts";
-import type { Market, ReversalAnalysis, ReversalStatus, ScreeningResult, SectorStrength, Strategy } from "@/lib/types";
+import type { Market, ReversalAnalysis, ReversalStatus, ScreeningResult, SectorStrength, Strategy, Timeframe } from "@/lib/types";
 
 type Period = 5 | 10 | 21;
 const periods: { days: Period; label: string }[] = [
@@ -24,6 +24,7 @@ function percent(value: number | null | undefined, digits = 1) {
 }
 
 function signalLabel(row: ScreeningResult) {
+  if (row.entry_signal === "wait_risk") return "위험 초과";
   if (row.entry_signal === "buy_breakout") return "Buy breakout";
   if (row.entry_signal === "wait_extended") return "Wait";
   return row.entry_trigger ? "Buy" : "Watch";
@@ -36,7 +37,7 @@ function tradingViewSymbol(market: Market, ticker: string) {
 type ChartCandle = { time: string; open: number; high: number; low: number; close: number; volume: number };
 const reversalLabels: Record<ReversalStatus, string> = { preparing: "반등 준비", confirmed: "돌파 확인", tracking: "돌파 추적", volume_wait: "확인 대기", extended: "추격 주의", risk_high: "위험 초과", market_wait: "시장 대기" };
 
-function DomesticChart({ market, ticker, runId, row, onSource }: { market: Market; ticker: string; runId: string | null; row: ScreeningResult; onSource: (source: string) => void }) {
+function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { market: Market; ticker: string; runId: string | null; row: ScreeningResult; timeframe: Timeframe; onSource: (source: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [candles, setCandles] = useState<ChartCandle[] | null>(null);
   const [error, setError] = useState(false);
@@ -48,9 +49,9 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
     setError(false);
     setIsSnapshot(false);
     onSource("");
-    const params = new URLSearchParams({ market, ticker });
+    const params = new URLSearchParams({ market, ticker, timeframe });
     if (runId) params.set("run", runId);
-    if (row.strategy === "reversal" && row.as_of) params.set("asof", row.as_of);
+    if (row.as_of) params.set("asof", row.as_of);
     fetch(`/api/chart?${params}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Chart request failed");
@@ -62,7 +63,7 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
       })
       .catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, [market, ticker, runId, row.strategy, row.as_of, onSource]);
+  }, [market, ticker, runId, timeframe, row.as_of, onSource]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -89,6 +90,19 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
     volumes.setData(candles.map(({ time, volume, open, close }) => ({
       time, value: volume, color: close >= open ? "#e9abab" : "#a7c9e3",
     })) as HistogramData<Time>[]);
+    if (timeframe === "weekly") {
+      for (const [weeks, color] of [[10, "#218773"], [30, "#c69429"], [40, "#596879"]] as const) {
+        const average = chart.addSeries(LineSeries, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: `MA${weeks}W` });
+        let sum = 0;
+        const points: { time: Time; value: number }[] = [];
+        candles.forEach((candle, index) => {
+          sum += candle.close;
+          if (index >= weeks) sum -= candles[index - weeks].close;
+          if (index >= weeks - 1) points.push({ time: candle.time as Time, value: sum / weeks });
+        });
+        average.setData(points);
+      }
+    }
     if (isSnapshot && row.strategy === "reversal" && row.trendline_anchors?.length === 2 && row.trendline_price != null) {
       const [first, second] = row.trendline_anchors;
       const start = candles.findIndex((candle) => candle.time.slice(0, 10) === first.time);
@@ -104,7 +118,7 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
     const observer = new ResizeObserver(() => chart.resize(container.clientWidth, container.clientHeight));
     observer.observe(container);
     return () => { observer.disconnect(); chart.remove(); };
-  }, [candles, isSnapshot, market, row]);
+  }, [candles, isSnapshot, market, row, timeframe]);
 
   return <div className="chartWidget domesticChart">
     <div ref={containerRef} className="chartCanvas" />
@@ -112,14 +126,14 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
   </div>;
 }
 
-function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; market: Market; runId: string | null; onClose: () => void }) {
+function ChartDialog({ row, market, runId, timeframe, onClose }: { row: ScreeningResult; market: Market; runId: string | null; timeframe: Timeframe; onClose: () => void }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [chartSource, setChartSource] = useState("");
   const priceDigits = market === "NASDAQ" ? 2 : 0;
   const symbol = tradingViewSymbol(market, row.ticker);
   const chartUrl = market === "NASDAQ"
-    ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`
+    ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}&interval=${timeframe === "weekly" ? "W" : "D"}`
     : `https://finance.yahoo.com/quote/${row.ticker}.${market === "KOSDAQ" ? "KQ" : "KS"}/chart/`;
 
   useEffect(() => {
@@ -140,7 +154,7 @@ function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; ma
 
   useEffect(() => {
     const container = chartRef.current;
-    if (!container || market !== "NASDAQ" || row.strategy === "reversal") return;
+    if (!container || market !== "NASDAQ" || row.strategy === "reversal" || timeframe === "weekly") return;
     const script = document.createElement("script");
     script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     script.async = true;
@@ -159,7 +173,7 @@ function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; ma
     });
     container.replaceChildren(script);
     return () => container.replaceChildren();
-  }, [market, symbol, row.strategy]);
+  }, [market, symbol, row.strategy, timeframe]);
 
   return (
     <div className="chartBackdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -167,22 +181,23 @@ function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; ma
         <div className="chartHeader">
           <div>
             <h2 id="chart-title">{row.security_name || row.ticker} <span className="chartTicker">{row.ticker}</span></h2>
-            <p>{market} · {row.sector_name || "업종 미분류"}</p>
+            <p>{market} · {row.sector_name || "업종 미분류"} · {timeframe === "weekly" ? "주봉" : "일봉"}{row.as_of ? ` · ${row.as_of}` : ""}</p>
           </div>
           <button ref={closeRef} className="iconButton" type="button" onClick={onClose} aria-label="차트 닫기" title="차트 닫기"><X size={20} /></button>
         </div>
         <div className="chartBody">
-          {market === "NASDAQ" && row.strategy !== "reversal" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} runId={runId} row={row} onSource={setChartSource} />}
+          {market === "NASDAQ" && row.strategy !== "reversal" && timeframe === "daily" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} runId={runId} row={row} timeframe={timeframe} onSource={setChartSource} />}
           <div className="chartDetails">
             <span>종가 <strong>{number(row.close, priceDigits)}</strong></span>
             <span>{row.strategy === "reversal" ? "돌파 구간" : "매수 구간"} <strong>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, priceDigits)}–${number(row.buy_zone_high, priceDigits)}`}</strong></span>
             <span>초기 손절 <strong>{number(row.initial_stop_price ?? row.stop_price, priceDigits)}</strong></span>
             <span>2R <strong>{number(row.two_r_price, priceDigits)}</strong></span>
+            {timeframe === "weekly" && <span className="weeklyLegend"><i className="ma10Key" />MA10W <i className="ma30Key" />MA30W <i className="ma40Key" />MA40W</span>}
             {row.strategy === "reversal" && <><span>하락 추세선 <strong>{number(row.trendline_price, market === "NASDAQ" ? 2 : 0)}</strong></span><span>거래량 <strong>{number(row.volume_ratio, 2)}×</strong></span><span>상태 <strong>{row.reversal_status ? reversalLabels[row.reversal_status] : "-"}</strong></span><span>재료·주식 구조 <strong>미검증</strong></span></>}
             <a href={chartUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> 외부 차트</a>
           </div>
         </div>
-        <div className="chartAttribution">{market === "NASDAQ" && row.strategy !== "reversal" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
+        <div className="chartAttribution">{market === "NASDAQ" && row.strategy !== "reversal" && timeframe === "daily" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
       </div>
     </div>
   );
@@ -204,7 +219,7 @@ function ResultTable({ rows, compact, onOpen }: { rows: ScreeningResult[]; compa
             <tr key={`${row.ticker}-${row.final_score}`}>
               <td className="mono"><span className={row.entry_trigger ? "triggerDot on" : "triggerDot"} /><button className="chartLink" type="button" title={`${row.ticker} 차트 열기`} onClick={() => onOpen(row)}>{row.ticker} <CandlestickChart size={14} /></button></td>
               {!compact && <td title={row.entry_reason ?? undefined}><span className={row.entry_trigger ? "signalPill buy" : row.entry_signal === "wait_extended" ? "signalPill wait" : "signalPill"}>{signalLabel(row)}</span></td>}
-              {!compact && <td>{row.entry_setup === "breakout" ? "Breakout" : row.entry_setup === "extended_watch" ? "Extended" : "Watch"}</td>}
+              {!compact && <td>{row.entry_setup === "breakout" ? "Breakout" : row.entry_setup === "risk_watch" ? "Risk watch" : row.entry_setup === "extended_watch" ? "Extended" : "Watch"}</td>}
               <td className="nameCell"><button className="chartLink" type="button" onClick={() => onOpen(row)}>{row.security_name || "-"}</button></td>
               <td>{row.sector_name || "-"}</td>
               <td>{number(row.close, 0)}</td><td className="strong">{number(row.final_score)}</td><td>{number(row.rs_rank)}</td><td>{number(row.trend_score)}</td>
@@ -229,14 +244,14 @@ function ReversalTable({ rows, onOpen, digits }: { rows: ScreeningResult[]; onOp
       <td><span className={row.entry_trigger ? "signalPill buy" : "signalPill"}>{row.reversal_status ? reversalLabels[row.reversal_status] : "-"}</span></td>
       <td className="nameCell"><button className="chartLink" type="button" onClick={() => onOpen(row)}>{row.security_name || row.ticker}</button></td>
       <td>{row.sector_name || "-"}</td><td>{number(row.close, digits)}</td><td className="strong">{number(row.final_score)}</td>
-      <td>{row.downtrend_days ?? "-"}거래일</td><td>{percent(row.decline_pct)}</td><td>{percent(row.rebound_pct)}</td>
+      <td>{row.downtrend_bars ?? row.downtrend_days ?? "-"}{row.timeframe === "weekly" ? "주" : "거래일"}</td><td>{percent(row.decline_pct)}</td><td>{percent(row.rebound_pct)}</td>
       <td>{number(row.trendline_price, digits)}</td><td>{number(row.volume_ratio, 2)}×</td><td title={row.stop_basis ?? undefined}>{number(row.stop_price, digits)}</td>
       <td>{percent(row.risk_to_stop)}</td><td>{number(row.two_r_price, digits)}</td><td>{percent(row.position_size_pct)}</td>
     </tr>)}{!rows.length && <tr><td className="empty" colSpan={15}>현재 조건에 맞는 저점 반등 후보가 없습니다.</td></tr>}</tbody>
   </table></div>;
 }
 
-export function ResultsPanel({ market, strategy, runId, candidates, scored, sectors, reversals, reversalAnalysis }: { market: Market; strategy: Strategy; runId: string | null; candidates: ScreeningResult[]; scored: ScreeningResult[]; sectors: SectorStrength[]; reversals: ScreeningResult[]; reversalAnalysis: ReversalAnalysis | null }) {
+export function ResultsPanel({ market, strategy, timeframe, weeklyAnalysis, runId, candidates, scored, sectors, reversals, reversalAnalysis }: { market: Market; strategy: Strategy; timeframe: Timeframe; weeklyAnalysis: ReversalAnalysis | null; runId: string | null; candidates: ScreeningResult[]; scored: ScreeningResult[]; sectors: SectorStrength[]; reversals: ScreeningResult[]; reversalAnalysis: ReversalAnalysis | null }) {
   const [period, setPeriod] = useState<Period>(5);
   const [selectedSector, setSelectedSector] = useState<string | null>(null);
   const [chartRow, setChartRow] = useState<ScreeningResult | null>(null);
@@ -268,20 +283,20 @@ export function ResultsPanel({ market, strategy, runId, candidates, scored, sect
     </section>
 
     {strategy === "reversal" ? <section className="section">
-      <div className="sectionHead"><div><h2>저점 반등{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>{reversalAnalysis ? `${reversalAnalysis.as_of} · ${reversalAnalysis.scanned_count}종목 분석 · 후보 ${reversals.length} · 돌파 확인 ${reversals.filter((row) => row.entry_trigger).length}` : "이 실행에는 저점 반등 분석 결과가 없습니다. 새 실행이 필요합니다."}</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
+      <div className="sectionHead"><div><h2>저점 반등 · {timeframe === "weekly" ? "주봉" : "일봉"}{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>{reversalAnalysis ? `${reversalAnalysis.as_of} · ${reversalAnalysis.scanned_count}종목 분석 · 후보 ${reversals.length} · 돌파 확인 ${reversals.filter((row) => row.entry_trigger).length}` : "이 실행에는 저점 반등 분석 결과가 없습니다. 새 실행이 필요합니다."}</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
       {reversalAnalysis ? <ReversalTable rows={visibleReversals} onOpen={setChartRow} digits={market === "NASDAQ" ? 2 : 0} /> : <p className="sectorEmpty">분석 미실행 또는 결과를 불러오지 못한 상태입니다.</p>}
       <p className="reversalCaution">제프리 뉴먼의 가격 패턴을 참고한 기술적 후보입니다. 사업 재료·희석 가능성은 미검증이며, 돌파 확인도 수익을 보장하지 않습니다.</p>
     </section> : <>
     <section className="section">
-      <div className="sectionHead"><div><h2>Candidate List{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>{market === "KOSPI_API" ? `${scored.length}종목 분석 · 80점 이상 ${highScore.length} · 박스폭 45% 이하 ${compactBase.length} · 최종 후보 ${candidates.length}` : "후보 종목을 누르면 차트가 열립니다."}</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
-      <ResultTable rows={visibleCandidates} onOpen={setChartRow} />
+      <div className="sectionHead"><div><h2>Candidate List · {timeframe === "weekly" ? "주봉" : "일봉"}{selectedSector ? ` · ${selectedSector}` : ""}</h2><p>{timeframe === "weekly" ? weeklyAnalysis ? `${weeklyAnalysis.as_of} · ${scored.length}종목 분석 · 후보 ${candidates.length}` : "주봉 분석 미실행 또는 결과를 불러오지 못한 상태입니다." : market === "KOSPI_API" ? `${scored.length}종목 분석 · 80점 이상 ${highScore.length} · 박스폭 45% 이하 ${compactBase.length} · 최종 후보 ${candidates.length}` : "후보 종목을 누르면 차트가 열립니다."}</p></div>{selectedSector && <button className="clearFilter" type="button" onClick={() => setSelectedSector(null)}><X size={15} /> 필터 해제</button>}</div>
+      {(timeframe === "daily" || weeklyAnalysis) && <ResultTable rows={visibleCandidates} onOpen={setChartRow} />}
     </section>
 
-    <section className="section">
+    {(timeframe === "daily" || weeklyAnalysis) && <section className="section">
       <div className="sectionHead"><div><h2>Full Scoreboard</h2><p>점수화된 {scored.length}종목</p></div></div>
       <ResultTable rows={visibleScored} compact onOpen={setChartRow} />
-    </section>
+    </section>}
     </>}
-    {chartRow && <ChartDialog row={chartRow} market={market} runId={runId} onClose={closeChart} />}
+    {chartRow && <ChartDialog row={chartRow} market={market} runId={runId} timeframe={timeframe} onClose={closeChart} />}
   </>;
 }

@@ -14,6 +14,7 @@ from screeners import kosdaq, kospi_api, nasdaq
 from screeners.reversal import build_reversals, completed_histories
 from screeners.common import add_technical_features, build_market_regime
 from screeners.sectors import calculate_sector_strength
+from screeners.weekly import build_weekly
 
 
 RUNNERS = {
@@ -164,6 +165,7 @@ def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
         "reversals": payload.get("reversals", []),
         "reversal_analysis": payload.get("reversal_analysis"),
         "reversal_sectors": payload.get("reversal_sectors", []),
+        "weekly": payload.get("weekly"),
         "members": {
             row["ticker"]: row.get("sector_name")
             for row in payload["scored"] if row.get("sector_name")
@@ -195,20 +197,21 @@ def chart_candles(histories: Dict[str, pd.DataFrame]) -> Dict[str, list]:
     }
 
 
-def upload_chart_snapshot(histories: Dict[str, pd.DataFrame], market: str, run_id: str) -> None:
+def upload_chart_snapshot(histories: Dict[str, pd.DataFrame], market: str, run_id: str, timeframe: str = "daily") -> None:
     if not histories:
         return
     base = os.environ["SUPABASE_URL"].rstrip("/") + "/storage/v1"
     headers = supabase_headers()
     body = json.dumps(chart_candles(histories), separators=(",", ":")).encode("utf-8")
+    suffix = "-weekly-charts" if timeframe == "weekly" else "-charts"
     response = requests.post(
-        f"{base}/object/stocke-sector-strength/{market}/{run_id}-charts.json",
+        f"{base}/object/stocke-sector-strength/{market}/{run_id}{suffix}.json",
         headers={**headers, "Content-Type": "application/json"},
         data=body,
         timeout=60,
     )
     response.raise_for_status()
-    print(f"[INFO] uploaded chart snapshot: {len(histories)} stocks, {len(body)} bytes")
+    print(f"[INFO] uploaded {timeframe} chart snapshot: {len(histories)} stocks, {len(body)} bytes")
 
 
 def main() -> None:
@@ -236,6 +239,15 @@ def main() -> None:
         result.get("reversal_sectors", {}), reversal_strength, as_of,
     )
     print(f"[INFO] reversal analysis: {scanned} scanned, {len(reversals)} setups, as_of={as_of}")
+    weekly, weekly_charts = build_weekly(result["selected"], histories, module.CFG, result.get("reversal_sectors", {}), requested_date=args.date)
+    weekly_payload = None
+    if weekly is not None:
+        weekly_payload = {key: records(weekly[key]) for key in ("scored", "candidates", "reversals", "sectors")}
+        weekly_payload["analysis"] = weekly["analysis"]
+        print(f"[INFO] weekly analysis: {weekly['analysis']['scanned_count']} scanned, "
+              f"{len(weekly['candidates'])} trend, {len(weekly['reversals'])} reversal, as_of={weekly['analysis']['as_of']}")
+    else:
+        print("[WARN] weekly analysis unavailable: benchmark history needs 56 completed weeks")
     finished_at = datetime.now(timezone.utc).isoformat()
 
     payload = {
@@ -253,6 +265,7 @@ def main() -> None:
                               "closed_bars_only": True, "regime_score": reversal_regime["score"],
                               "exposure": reversal_regime["exposure"]},
         "reversal_sectors": records(reversal_strength),
+        "weekly": weekly_payload,
         "started_at": started_at,
         "finished_at": finished_at,
     }
@@ -269,6 +282,7 @@ def main() -> None:
         if payload["market"] == "NASDAQ":
             charts = {row["ticker"]: charts[row["ticker"]] for row in payload["reversals"] if row["ticker"] in charts}
         upload_chart_snapshot(charts, payload["market"], run_id)
+        upload_chart_snapshot(weekly_charts, payload["market"], run_id, "weekly")
     else:
         print("[INFO] Supabase env vars are missing; skipped upload")
 

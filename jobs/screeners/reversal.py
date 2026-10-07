@@ -1,11 +1,33 @@
 """Price-based early reversal screen; not a complete Neumann strategy."""
 
+from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from .common import MarketConfig, add_technical_features
+
+
+@dataclass(frozen=True)
+class ReversalPeriods:
+    minimum: int = 260
+    pivot: int = 5
+    second_age: int = 84
+    first_age: int = 126
+    anchor_span: int = 63
+    setup: int = 10
+    slope_skip: int = 20
+    low: int = 63
+    base: int = 30
+    average: int = 20
+    average_rise: int = 6
+    volume: int = 20
+    timeframe: str = "daily"
+
+
+DAILY_PERIODS = ReversalPeriods()
+WEEKLY_PERIODS = ReversalPeriods(56, 2, 17, 26, 13, 2, 4, 13, 6, 4, 2, 10, "weekly")
 
 
 def completed_histories(histories: Dict[str, pd.DataFrame], market: str,
@@ -47,18 +69,19 @@ def clean_history(history: pd.DataFrame) -> pd.DataFrame:
     return frame.tail(504)
 
 
-def descending_resistance(frame: pd.DataFrame) -> Optional[Tuple[int, int, float, np.ndarray]]:
+def descending_resistance(frame: pd.DataFrame, periods: ReversalPeriods = DAILY_PERIODS) -> Optional[Tuple[int, int, float, np.ndarray]]:
     high = frame.high.to_numpy(dtype=float)
     n = len(high)
-    # A pivot requires five subsequent bars, all strictly before today's signal.
-    pivots = [i for i in range(5, n - 6) if high[i] == max(high[i - 5:i + 6])
-              and high[i] > max(high[i - 5:i])]
+    # Confirmation bars must all precede the signal bar on either timeframe.
+    radius = periods.pivot
+    pivots = [i for i in range(radius, n - radius - 1) if high[i] == max(high[i - radius:i + radius + 1])
+              and high[i] > max(high[i - radius:i])]
     choices = []
     for second in pivots:
-        if second < n - 84:
+        if second < n - periods.second_age:
             continue
         for first in pivots:
-            if second - first < 63 or first > n - 126:
+            if second - first < periods.anchor_span or first > n - periods.first_age:
                 continue
             if high[second] > high[first] * 0.85:
                 continue
@@ -67,7 +90,7 @@ def descending_resistance(frame: pd.DataFrame) -> Optional[Tuple[int, int, float
             if line[-1] <= 0:
                 continue
             # Reject lines already broken before the current ten-bar setup.
-            if np.any(frame.close.to_numpy()[second + 1:n - 10] > line[second + 1:n - 10] * 1.02):
+            if np.any(frame.close.to_numpy()[second + 1:n - periods.setup] > line[second + 1:n - periods.setup] * 1.02):
                 continue
             if np.mean(high[first:second + 1] <= line[first:second + 1] * 1.02) < 0.95:
                 continue
@@ -81,44 +104,48 @@ def descending_resistance(frame: pd.DataFrame) -> Optional[Tuple[int, int, float
 
 def analyze_reversal(ticker: str, name: str, history: pd.DataFrame, cfg: MarketConfig,
                      regime_score: float, sector: Optional[str] = None,
-                     sector_score: Optional[float] = None) -> Optional[dict]:
+                     sector_score: Optional[float] = None,
+                     periods: ReversalPeriods = DAILY_PERIODS) -> Optional[dict]:
     frame = clean_history(history)
-    if len(frame) < 260:
+    if len(frame) < periods.minimum:
         return None
     frame = add_technical_features(frame)
+    if periods.timeframe == "weekly":
+        frame["ma20"] = frame.close.rolling(periods.average).mean()
+        frame["adv20"] = frame["daily_adv20"]
     last = frame.iloc[-1]
     if last.close < cfg.min_price or last.adv20 < cfg.min_adv20 or last.atr_pct > cfg.max_atr_pct:
         return None
-    historical = frame.close.iloc[-126:-20].to_numpy(dtype=float)
+    historical = frame.close.iloc[-periods.first_age:-periods.slope_skip].to_numpy(dtype=float)
     if np.polyfit(np.arange(len(historical)), np.log(historical), 1)[0] >= 0:
         return None
-    resistance = descending_resistance(frame)
+    resistance = descending_resistance(frame, periods)
     if resistance is None:
         return None
     first, second, slope, line = resistance
-    low = float(frame.low.iloc[-63:].min())
+    low = float(frame.low.iloc[-periods.low:].min())
     decline = 1 - low / float(frame.high.iloc[first:second + 1].max())
     rebound = float(last.close / low - 1)
-    higher_low = frame.low.iloc[-10:].min() >= frame.low.iloc[-30:-10].min() * 0.98
+    higher_low = frame.low.iloc[-periods.setup:].min() >= frame.low.iloc[-periods.base:-periods.setup].min() * 0.98
     if decline < 0.25 or not 0.04 <= rebound <= 0.40 or not higher_low:
         return None
-    if last.close <= last.ma20 or last.ma20 <= frame.ma20.iloc[-6]:
+    if last.close <= last.ma20 or last.ma20 <= frame.ma20.iloc[-periods.average_rise]:
         return None
     extension = float(last.close / line[-1] - 1)
     if not -0.05 <= extension <= 0.15:
         return None
     close = frame.close.to_numpy(dtype=float)
     crossed = (close[1:] >= line[1:] * 1.01) & (close[:-1] < line[:-1] * 1.01)
-    recent_crosses = np.flatnonzero(crossed[-10:])
+    recent_crosses = np.flatnonzero(crossed[-periods.setup:])
     above = close[-1] >= line[-1] * 1.01
     fresh = bool(crossed[-1])
     if above and not len(recent_crosses):
         return None
-    previous_volume = float(frame.volume.iloc[-21:-1].mean())
+    previous_volume = float(frame.volume.iloc[-periods.volume - 1:-1].mean())
     if previous_volume <= 0:
         return None
     volume_ratio = float(last.volume / previous_volume)
-    stop = float(frame.low.iloc[-10:].min() - last.atr14 * 0.5)
+    stop = float(frame.low.iloc[-periods.setup:].min() - last.atr14 * 0.5)
     risk = float((last.close - stop) / last.close)
     if not 0 < risk < 1 or stop <= 0:
         return None
@@ -139,10 +166,10 @@ def analyze_reversal(ticker: str, name: str, history: pd.DataFrame, cfg: MarketC
              + min(volume_ratio / 1.5, 1) * 20 + (sector_score or 0) * 0.1)
     return {
         "ticker": ticker, "security_name": name, "sector_name": sector,
-        "strategy": "reversal", "close": float(last.close), "adv20": float(last.adv20),
+        "strategy": "reversal", "timeframe": periods.timeframe, "close": float(last.close), "adv20": float(last.adv20),
         "final_score": round(score, 1), "rs_rank": None, "trend_score": None,
         "momentum_score": None, "breakout_score": None, "accumulation_score": None, "vcp_score": None,
-        "downtrend_days": len(frame) - 1 - first, "decline_pct": decline, "rebound_pct": rebound,
+        "downtrend_days": len(frame) - 1 - first, "downtrend_bars": len(frame) - 1 - first, "decline_pct": decline, "rebound_pct": rebound,
         "trendline_price": float(line[-1]), "volume_ratio": volume_ratio, "reversal_status": status,
         "trendline_anchors": [{"time": frame.index[i].strftime("%Y-%m-%d"), "price": float(frame.high.iloc[i])}
                               for i in (first, second)],
@@ -152,7 +179,7 @@ def analyze_reversal(ticker: str, name: str, history: pd.DataFrame, cfg: MarketC
         "risk_to_stop": risk, "two_r_price": float(last.close + 2 * (last.close - stop)),
         "position_size_pct": min(0.0025 / risk, 0.05) if trigger else 0.0,
         "is_candidate": True, "entry_reason": "Fresh descending-resistance breakout; catalyst and share structure unverified.",
-        "stop_basis": "Ten-session low minus 0.5 ATR; never clamped to a fixed risk.",
+        "stop_basis": f"{periods.setup} {periods.timeframe} bars low minus 0.5 ATR14; never clamped to a fixed risk.",
     }
 
 

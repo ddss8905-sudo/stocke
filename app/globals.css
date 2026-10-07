@@ -607,4 +607,10 @@ tr:last-child td {
   }
 }
 .strategyTabs { display: flex; gap: 8px; margin: 20px 0; flex-wrap: wrap; }
+.timeframeTabs { display: flex; gap: 4px; margin-left: auto; padding-left: 12px; border-left: 1px solid var(--line); }
+.weeklyLegend { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.weeklyLegend i { display: inline-block; height: 2px; width: 14px; }
+.ma10Key { background: #218773; }
+.ma30Key { background: #c69429; }
+.ma40Key { background: #596879; }
 .reversalCaution { margin: 16px 0 0; color: #686d73; font-size: 13px; line-height: 1.6; }

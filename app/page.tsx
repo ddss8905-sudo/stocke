@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { Activity, ArrowDownRight, ArrowUpRight, Clock, Database, Filter } from "lucide-react";
 import { getDashboardData } from "@/lib/data";
-import type { Market, Strategy } from "@/lib/types";
+import type { Market, Strategy, Timeframe } from "@/lib/types";
 import { RunButtons } from "./run-buttons";
 import { ResultsPanel } from "./results-panel";
 
 type PageProps = {
-  searchParams?: Promise<{ market?: string; strategy?: string }>;
+  searchParams?: Promise<{ market?: string; strategy?: string; timeframe?: string }>;
 };
 
 const markets: Market[] = ["NASDAQ", "KOSDAQ", "KOSPI_API"];
@@ -40,11 +40,11 @@ function dateTime(value: string | null | undefined) {
   }).format(new Date(value));
 }
 
-function MarketTabs({ active, strategy }: { active: Market; strategy: Strategy }) {
+function MarketTabs({ active, strategy, timeframe }: { active: Market; strategy: Strategy; timeframe: Timeframe }) {
   return (
     <div className="tabs" aria-label="Market selector">
       {markets.map((market) => (
-        <a className={market === active ? "tab active" : "tab"} href={`/?market=${market}&strategy=${strategy}`} key={market}>
+        <a className={market === active ? "tab active" : "tab"} href={`/?market=${market}&strategy=${strategy}&timeframe=${timeframe}`} key={market}>
           {market}
         </a>
       ))}
@@ -68,13 +68,20 @@ export default async function Page({ searchParams }: PageProps) {
   const params = await searchParams;
   const market = asMarket(params?.market);
   const strategy: Strategy = params?.strategy === "reversal" ? "reversal" : "trend";
+  const timeframe: Timeframe = params?.timeframe === "weekly" ? "weekly" : "daily";
   const data = await getDashboardData(market);
-  const regimeScore = strategy === "reversal" ? data.reversalAnalysis?.regime_score : data.run?.market_regime_score;
+  const weekly = timeframe === "weekly";
+  const candidates = weekly ? data.weekly?.candidates ?? [] : data.candidates;
+  const scored = weekly ? data.weekly?.scored ?? [] : data.scored;
+  const reversals = weekly ? data.weekly?.reversals ?? [] : data.reversals;
+  const analysis = weekly ? data.weekly?.analysis ?? null : data.reversalAnalysis;
+  const sectors = weekly ? data.weekly?.sectors ?? [] : strategy === "reversal" ? data.reversalSectors : data.sectors;
+  const regimeScore = weekly || strategy === "reversal" ? analysis?.regime_score : data.run?.market_regime_score;
   const latestRun = dateTime(data.run?.finished_at) || data.run?.run_date || "-";
   const regimeValue = data.run
     ? `${regimeLabel(regimeScore)} ${number(regimeScore, 0)}`
     : "-";
-  const regimeTradable = Number(strategy === "reversal" ? data.reversalAnalysis?.exposure : data.run?.market_exposure ?? 0) > 0;
+  const regimeTradable = Number(weekly || strategy === "reversal" ? analysis?.exposure : data.run?.market_exposure ?? 0) > 0;
 
   return (
     <main>
@@ -83,24 +90,28 @@ export default async function Page({ searchParams }: PageProps) {
           <p className="eyebrow">Trend & Reversal Screener</p>
           <h1>Market Screener</h1>
         </div>
-        <MarketTabs active={market} strategy={strategy} />
+        <MarketTabs active={market} strategy={strategy} timeframe={timeframe} />
       </section>
 
-      {data.usingSampleData && (
+      {data.usingSampleData && !weekly && (
         <div className="notice">
           Supabase data is unavailable, so sample rows are shown. Resume the Supabase project and verify Vercel environment variables to display live screening results.
         </div>
       )}
 
       <nav className="strategyTabs" aria-label="스크리닝 전략">
-        <a aria-current={strategy === "trend" ? "page" : undefined} className={strategy === "trend" ? "tab active" : "tab"} href={`/?market=${market}&strategy=trend`}>추세추종</a>
-        <a aria-current={strategy === "reversal" ? "page" : undefined} className={strategy === "reversal" ? "tab active" : "tab"} href={`/?market=${market}&strategy=reversal`}>저점 반등</a>
+        <a aria-current={strategy === "trend" ? "page" : undefined} className={strategy === "trend" ? "tab active" : "tab"} href={`/?market=${market}&strategy=trend&timeframe=${timeframe}`}>추세추종</a>
+        <a aria-current={strategy === "reversal" ? "page" : undefined} className={strategy === "reversal" ? "tab active" : "tab"} href={`/?market=${market}&strategy=reversal&timeframe=${timeframe}`}>저점 반등</a>
+        <div className="timeframeTabs" aria-label="봉 기준">
+          {(["daily", "weekly"] as const).map((value) => <a key={value} aria-current={timeframe === value ? "page" : undefined} className={timeframe === value ? "tab active" : "tab"} href={`/?market=${market}&strategy=${strategy}&timeframe=${value}`}>{value === "weekly" ? "주봉" : "일봉"}</a>)}
+        </div>
       </nav>
+      {weekly && <div className="notice">{analysis ? `주봉 기준 ${analysis.as_of} · 가격 기준 ${data.weekly?.analysis.price_date} · 마감된 주만 반영` : "이 실행에는 주봉 분석 결과가 없습니다. 새 실행 완료 후 표시됩니다."}</div>}
       <section className="stats">
         <Stat label="Market" value={market} icon={<Database size={18} />} />
         <Stat label="Latest run" value={latestRun} icon={<Clock size={18} />} />
         <Stat label="Run mode" value={market === "KOSPI_API" ? "KIS API" : "On demand"} icon={<Activity size={18} />} />
-        <Stat label="Candidates" value={strategy === "reversal" ? data.reversalAnalysis ? String(data.reversals.length) : "-" : String(data.run?.candidate_count ?? data.candidates.length)} icon={<Filter size={18} />} />
+        <Stat label="Candidates" value={weekly && !analysis ? "-" : strategy === "reversal" ? analysis ? String(reversals.length) : "-" : String(weekly ? candidates.length : data.run?.candidate_count ?? candidates.length)} icon={<Filter size={18} />} />
         <Stat
           label="Regime"
           value={regimeValue}
@@ -115,10 +126,10 @@ export default async function Page({ searchParams }: PageProps) {
             <p>Trigger the selected market workflow in GitHub Actions, then refresh after it completes.</p>
           </div>
         </div>
-        <RunButtons market={market} strategy={strategy} />
+        <RunButtons market={market} strategy={strategy} timeframe={timeframe} />
       </section>
 
-      <ResultsPanel key={`${market}-${strategy}-${data.run?.id}`} market={market} strategy={strategy} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={strategy === "reversal" ? data.reversalSectors : data.sectors} reversals={data.reversals} reversalAnalysis={data.reversalAnalysis} />
+      <ResultsPanel key={`${market}-${strategy}-${timeframe}-${data.run?.id}`} market={market} strategy={strategy} timeframe={timeframe} weeklyAnalysis={data.weekly?.analysis ?? null} runId={data.run?.id ?? null} candidates={candidates} scored={scored} sectors={sectors} reversals={reversals} reversalAnalysis={analysis} />
     </main>
   );
 }
