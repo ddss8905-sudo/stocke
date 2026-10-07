@@ -11,7 +11,9 @@ import pandas as pd
 import requests
 
 from screeners import kosdaq, kospi_api, nasdaq
-from screeners.reversal import build_reversals
+from screeners.reversal import build_reversals, completed_histories
+from screeners.common import add_technical_features, build_market_regime
+from screeners.sectors import calculate_sector_strength
 
 
 RUNNERS = {
@@ -161,6 +163,7 @@ def upload_sector_snapshot(payload: Dict[str, Any], run_id: str) -> None:
         "sectors": payload.get("sector_strength", []),
         "reversals": payload.get("reversals", []),
         "reversal_analysis": payload.get("reversal_analysis"),
+        "reversal_sectors": payload.get("reversal_sectors", []),
         "members": {
             row["ticker"]: row.get("sector_name")
             for row in payload["scored"] if row.get("sector_name")
@@ -218,12 +221,19 @@ def main() -> None:
     started_at = datetime.now(timezone.utc).isoformat()
     result = RUNNERS[args.market](args.date)
     module = {"NASDAQ": nasdaq, "KOSDAQ": kosdaq, "KOSPI_API": kospi_api}[args.market]
-    histories = result.get("reversal_histories", {})
+    histories = completed_histories(result.get("reversal_histories", {}), args.market)
     benchmark = histories.get(module.CFG.benchmark_tickers[0])
-    as_of = benchmark.index[-1].strftime("%Y-%m-%d") if benchmark is not None and not benchmark.empty else result["run_date"]
+    if benchmark is None or benchmark.empty:
+        raise RuntimeError("No completed benchmark daily bars for reversal analysis.")
+    as_of = benchmark.index[-1].strftime("%Y-%m-%d")
+    histories = {ticker: history.loc[pd.to_datetime(history.index).strftime("%Y-%m-%d") <= as_of] for ticker, history in histories.items()}
+    reversal_regime = build_market_regime(add_technical_features(histories[module.CFG.benchmark_tickers[0]]))
+    members = result["selected"][["ticker"]].copy()
+    members["sector_name"] = members["ticker"].map(result.get("reversal_sectors", {}))
+    reversal_strength = calculate_sector_strength(members, histories, histories[module.CFG.benchmark_tickers[0]])
     reversals, scanned = build_reversals(
-        result["selected"], histories, module.CFG, result.get("market_regime_score", 0),
-        result.get("reversal_sectors", {}), result.get("sector_strength", pd.DataFrame()), as_of,
+        result["selected"], histories, module.CFG, reversal_regime["score"],
+        result.get("reversal_sectors", {}), reversal_strength, as_of,
     )
     print(f"[INFO] reversal analysis: {scanned} scanned, {len(reversals)} setups, as_of={as_of}")
     finished_at = datetime.now(timezone.utc).isoformat()
@@ -239,7 +249,10 @@ def main() -> None:
         "candidates": records(result["candidates"]),
         "sector_strength": records(result.get("sector_strength", pd.DataFrame())),
         "reversals": records(reversals),
-        "reversal_analysis": {"version": 1, "scanned_count": scanned, "as_of": as_of},
+        "reversal_analysis": {"version": 1, "scanned_count": scanned, "as_of": as_of,
+                              "closed_bars_only": True, "regime_score": reversal_regime["score"],
+                              "exposure": reversal_regime["exposure"]},
+        "reversal_sectors": records(reversal_strength),
         "started_at": started_at,
         "finished_at": finished_at,
     }

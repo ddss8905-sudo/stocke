@@ -50,6 +50,7 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
     onSource("");
     const params = new URLSearchParams({ market, ticker });
     if (runId) params.set("run", runId);
+    if (row.strategy === "reversal" && row.as_of) params.set("asof", row.as_of);
     fetch(`/api/chart?${params}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Chart request failed");
@@ -61,7 +62,7 @@ function DomesticChart({ market, ticker, runId, row, onSource }: { market: Marke
       })
       .catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, [market, ticker, runId, onSource]);
+  }, [market, ticker, runId, row.strategy, row.as_of, onSource]);
 
   useEffect(() => {
     const container = containerRef.current;

@@ -27,6 +27,7 @@ function sampleDashboardData(market: Market): DashboardData {
     sectors: [],
     reversals: [],
     reversalAnalysis: null,
+    reversalSectors: [],
     usingSampleData: true,
   };
 }
@@ -85,7 +86,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     );
     const run = runs[0] ?? null;
     if (!run) {
-      return { market, run: null, candidates: [], scored: [], sectors: [], reversals: [], reversalAnalysis: null, usingSampleData: false };
+      return { market, run: null, candidates: [], scored: [], sectors: [], reversals: [], reversalAnalysis: null, reversalSectors: [], usingSampleData: false };
     }
 
     const base = `screening_results?run_id=eq.${run.id}`;
@@ -100,6 +101,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     let members: Record<string, string> = {};
     let reversals: ScreeningResult[] = [];
     let reversalAnalysis: DashboardData["reversalAnalysis"] = null;
+    let reversalSectors: DashboardData["sectors"] = [];
     try {
       const response = await fetch(
         `${supabaseBaseUrl()}/storage/v1/object/authenticated/stocke-sector-strength/${market}/${run.id}.json`,
@@ -113,13 +115,15 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
           members: Record<string, string>;
           reversals?: ScreeningResult[];
           reversal_analysis?: DashboardData["reversalAnalysis"];
+          reversal_sectors?: DashboardData["sectors"];
         };
         if (snapshot.run_id === run.id && snapshot.market === market) {
           sectors = snapshot.sectors;
           members = snapshot.members;
-          if (snapshot.reversal_analysis?.version === 1 && Array.isArray(snapshot.reversals)) {
+          if (snapshot.reversal_analysis?.version === 1 && snapshot.reversal_analysis.closed_bars_only && Array.isArray(snapshot.reversals)) {
             reversals = snapshot.reversals;
             reversalAnalysis = snapshot.reversal_analysis;
+            reversalSectors = snapshot.reversal_sectors ?? [];
           }
         }
       } else if (response.status !== 404) {
@@ -130,7 +134,7 @@ export async function getDashboardData(market: Market): Promise<DashboardData> {
     }
 
     const withSector = (row: ScreeningResult) => ({ ...row, sector_name: members[row.ticker] ?? null });
-    return { market, run, candidates: candidates.map(withSector), scored: scored.map(withSector), sectors, reversals, reversalAnalysis, usingSampleData: false };
+    return { market, run, candidates: candidates.map(withSector), scored: scored.map(withSector), sectors, reversals, reversalAnalysis, reversalSectors, usingSampleData: false };
   } catch (error) {
     console.error("[supabase] dashboard data fetch failed", {
       market,

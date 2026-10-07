@@ -37,9 +37,18 @@ above the 200-day average is imposed on reversal candidates.
   upward just to satisfy a risk limit. High-risk setups remain watch-only.
 - Indicative sizing: 0.25% portfolio risk / stop fraction, capped at 5% per
   position, and zero for watch-only setups. 2R is a reference, not a profit forecast.
-  Signals are end-of-day observations, not guaranteed fills at that close.
+Signals are end-of-day observations, not guaranteed fills at that close.
 
 ## Score and Data
+
+Reversal analysis uses completed daily bars only, unlike the unchanged existing
+trend view. Today's bar is excluded until 16:15 America/New_York or 16:45
+Asia/Seoul. These are conservative application cutoffs, not official market hours;
+the Korean grace period also covers the regular delayed CSAT closing session.
+Early-closing US sessions are deliberately not admitted until the normal cutoff.
+The Eastern timezone handles daylight saving time. Sector strength, regime and
+stock histories are all trimmed to the same completed benchmark date. Charts in
+the reversal view are trimmed to that same date, even if newer prices exist.
 
 0-100 score: decline depth 25, stable base 20, resistance proximity/break 25,
 volume 20, one-month sector strength 10. Missing sector classification earns no
@@ -50,7 +59,8 @@ at the benchmark's last trading date. Five post-pivot bars must be available
 before the signal day; no centered-window lookahead is used for today's signal.
 
 Results are versioned in the existing private Supabase sector snapshot under
-`reversals` and `reversal_analysis`. No database migration is required. Older runs
+`reversals`, `reversal_analysis` and `reversal_sectors`. A `closed_bars_only` flag
+is required before rendering reversal data. No database migration is required. Older runs
 display analysis unavailable, not zero candidates. Chart snapshots preserve the
 OHLCV used by the screener; overlays appear only on matching snapshots. External
 fallback prices can differ and do not get algorithm overlays.

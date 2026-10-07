@@ -1,13 +1,15 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from screeners.nasdaq import CFG
-from screeners.reversal import analyze_reversal, build_reversals, descending_resistance
+from screeners.reversal import analyze_reversal, build_reversals, completed_histories, descending_resistance
+import run_market
 
 
 def reversal_history():
@@ -26,6 +28,47 @@ def reversal_history():
 
 
 class ReversalTests(unittest.TestCase):
+    def test_run_pipeline_persists_closed_reversal_metadata_without_db_columns(self):
+        frame = reversal_history()
+        selected = pd.DataFrame([{"ticker": "TEST", "security_name": "Test"}])
+        result = {"market": "NASDAQ", "run_date": "2026-10-07", "market_bullish": False,
+                  "selected": selected, "scored": pd.DataFrame(), "candidates": pd.DataFrame(),
+                  "reversal_histories": {"TEST": frame, "QQQ": frame, "SPY": frame}, "reversal_sectors": {}}
+        with patch.dict(run_market.RUNNERS, {"NASDAQ": lambda _: result}), \
+             patch.object(sys, "argv", ["run_market.py", "--market", "NASDAQ"]), \
+             patch.dict(run_market.os.environ, {"SUPABASE_URL": "https://example.invalid", "SUPABASE_SERVICE_ROLE_KEY": "test"}), \
+             patch.object(run_market, "write_local_payload"), \
+             patch.object(run_market, "upload_to_supabase", return_value="test-run") as database, \
+             patch.object(run_market, "upload_sector_snapshot") as snapshot, \
+             patch.object(run_market, "upload_chart_snapshot"):
+            run_market.main()
+        payload = database.call_args[0][0]
+        self.assertTrue(payload["reversal_analysis"]["closed_bars_only"])
+        self.assertEqual(payload["reversal_analysis"]["scanned_count"], 1)
+        self.assertEqual(payload["reversal_analysis"]["as_of"], frame.index[-1].strftime("%Y-%m-%d"))
+        self.assertEqual(len(payload["reversals"]), 1)
+        self.assertEqual(payload["scored"], [])
+        self.assertEqual(snapshot.call_args[0][1], "test-run")
+
+    def test_domestic_intraday_and_delayed_close_bars_are_excluded(self):
+        frame = reversal_history().tail(2)
+        frame.index = pd.to_datetime(["2026-10-06", "2026-10-07"]).date
+        for time in ("2026-10-07T09:08:00+09:00", "2026-10-07T16:30:00+09:00"):
+            history = completed_histories({"TEST": frame}, "KOSDAQ", pd.Timestamp(time))["TEST"]
+            self.assertEqual(len(history), 1)
+        closed = completed_histories({"TEST": frame}, "KOSPI_API", pd.Timestamp("2026-10-07T16:45:00+09:00"))["TEST"]
+        self.assertEqual(len(closed), 2)
+
+    def test_us_cutoff_uses_eastern_time_and_dst(self):
+        frame = reversal_history().tail(2)
+        for day, utc_close in (("2026-07-07", "20:15"), ("2026-12-07", "21:15")):
+            frame.index = pd.to_datetime(["2026-01-01", day])
+            closed = pd.Timestamp(f"{day}T{utc_close}:00Z")
+            before = completed_histories({"TEST": frame}, "NASDAQ", closed - pd.Timedelta(minutes=1))["TEST"]
+            after = completed_histories({"TEST": frame}, "NASDAQ", closed)["TEST"]
+            self.assertEqual(len(before), 1)
+            self.assertEqual(len(after), 2)
+
     def test_fresh_breakout_ignores_negative_long_term_momentum(self):
         frame = reversal_history()
         row = analyze_reversal("TEST", "Test", frame, CFG, 80)

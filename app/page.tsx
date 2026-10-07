@@ -69,11 +69,12 @@ export default async function Page({ searchParams }: PageProps) {
   const market = asMarket(params?.market);
   const strategy: Strategy = params?.strategy === "reversal" ? "reversal" : "trend";
   const data = await getDashboardData(market);
+  const regimeScore = strategy === "reversal" ? data.reversalAnalysis?.regime_score : data.run?.market_regime_score;
   const latestRun = dateTime(data.run?.finished_at) || data.run?.run_date || "-";
   const regimeValue = data.run
-    ? `${regimeLabel(data.run.market_regime_score)} ${number(data.run.market_regime_score, 0)}`
+    ? `${regimeLabel(regimeScore)} ${number(regimeScore, 0)}`
     : "-";
-  const regimeTradable = Number(data.run?.market_exposure ?? 0) > 0;
+  const regimeTradable = Number(strategy === "reversal" ? data.reversalAnalysis?.exposure : data.run?.market_exposure ?? 0) > 0;
 
   return (
     <main>
@@ -117,7 +118,7 @@ export default async function Page({ searchParams }: PageProps) {
         <RunButtons market={market} strategy={strategy} />
       </section>
 
-      <ResultsPanel key={`${market}-${strategy}-${data.run?.id}`} market={market} strategy={strategy} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={data.sectors} reversals={data.reversals} reversalAnalysis={data.reversalAnalysis} />
+      <ResultsPanel key={`${market}-${strategy}-${data.run?.id}`} market={market} strategy={strategy} runId={data.run?.id ?? null} candidates={data.candidates} scored={data.scored} sectors={strategy === "reversal" ? data.reversalSectors : data.sectors} reversals={data.reversals} reversalAnalysis={data.reversalAnalysis} />
     </main>
   );
 }

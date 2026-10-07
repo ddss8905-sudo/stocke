@@ -8,6 +8,22 @@ import pandas as pd
 from .common import MarketConfig, add_technical_features
 
 
+def completed_histories(histories: Dict[str, pd.DataFrame], market: str,
+                        now: Optional[pd.Timestamp] = None) -> Dict[str, pd.DataFrame]:
+    timezone = "America/New_York" if market == "NASDAQ" else "Asia/Seoul"
+    local = (now if now is not None else pd.Timestamp.now(tz="UTC")).tz_convert(timezone)
+    # Conservative grace periods; Korean cutoff also covers the delayed CSAT close.
+    cutoff_minutes = 16 * 60 + 15 if market == "NASDAQ" else 16 * 60 + 45
+    include_today = local.hour * 60 + local.minute >= cutoff_minutes
+    today = local.strftime("%Y-%m-%d")
+    result = {}
+    for ticker, history in histories.items():
+        days = pd.to_datetime(history.index, errors="coerce").strftime("%Y-%m-%d")
+        mask = days <= today if include_today else days < today
+        result[ticker] = history.loc[mask].copy()
+    return result
+
+
 def clean_history(history: pd.DataFrame) -> pd.DataFrame:
     columns = ["open", "high", "low", "close", "volume"]
     if not all(column in history for column in columns):

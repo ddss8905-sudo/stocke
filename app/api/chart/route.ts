@@ -29,6 +29,9 @@ export async function GET(request: NextRequest) {
   const market = request.nextUrl.searchParams.get("market");
   const ticker = request.nextUrl.searchParams.get("ticker");
   const runId = request.nextUrl.searchParams.get("run");
+  const asOf = request.nextUrl.searchParams.get("asof");
+  if (asOf && !/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return NextResponse.json({ error: "잘못된 기준일입니다." }, { status: 400 });
+  const throughDate = (candles: Candle[]) => asOf ? candles.filter((candle) => candle.time.slice(0, 10) <= asOf) : candles;
   if ((market !== "NASDAQ" && market !== "KOSDAQ" && market !== "KOSPI_API") || !ticker || !(market === "NASDAQ" ? /^[A-Z][A-Z0-9.-]{0,9}$/.test(ticker) : /^\d{6}$/.test(ticker))) {
     return NextResponse.json({ error: "잘못된 종목 코드입니다." }, { status: 400 });
   }
@@ -39,7 +42,7 @@ export async function GET(request: NextRequest) {
   if (runId) {
     try {
       const candles = await snapshotCandles(market, runId, ticker);
-      if (candles?.length) return NextResponse.json({ candles, source: market === "KOSPI_API" ? "KIS" : market === "KOSDAQ" ? "KRX" : "Yahoo Finance", snapshot: true });
+      if (candles?.length) return NextResponse.json({ candles: throughDate(candles), source: market === "KOSPI_API" ? "KIS" : market === "KOSDAQ" ? "KRX" : "Yahoo Finance", snapshot: true });
     } catch (error) {
       console.error("Chart snapshot request failed", market, ticker, error);
     }
@@ -78,7 +81,7 @@ export async function GET(request: NextRequest) {
       }];
     });
     if (!candles.length) throw new Error("No valid candles");
-    return NextResponse.json({ candles, source: "Yahoo Finance" });
+    return NextResponse.json({ candles: throughDate(candles), source: "Yahoo Finance" });
   } catch (error) {
     console.error("Chart request failed", market, ticker, error);
     return NextResponse.json({ error: "가격 차트를 불러오지 못했습니다." }, { status: 502 });
