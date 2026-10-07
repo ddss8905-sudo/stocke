@@ -115,6 +115,7 @@ function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; ma
   const chartRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [chartSource, setChartSource] = useState("");
+  const priceDigits = market === "NASDAQ" ? 2 : 0;
   const symbol = tradingViewSymbol(market, row.ticker);
   const chartUrl = market === "NASDAQ"
     ? `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`
@@ -172,15 +173,15 @@ function ChartDialog({ row, market, runId, onClose }: { row: ScreeningResult; ma
         <div className="chartBody">
           {market === "NASDAQ" && row.strategy !== "reversal" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} runId={runId} row={row} onSource={setChartSource} />}
           <div className="chartDetails">
-            <span>종가 <strong>{number(row.close, 0)}</strong></span>
-            <span>매수 구간 <strong>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, 0)}–${number(row.buy_zone_high, 0)}`}</strong></span>
-            <span>초기 손절 <strong>{number(row.initial_stop_price ?? row.stop_price, 0)}</strong></span>
-            <span>2R <strong>{number(row.two_r_price, 0)}</strong></span>
+            <span>종가 <strong>{number(row.close, priceDigits)}</strong></span>
+            <span>{row.strategy === "reversal" ? "돌파 구간" : "매수 구간"} <strong>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, priceDigits)}–${number(row.buy_zone_high, priceDigits)}`}</strong></span>
+            <span>초기 손절 <strong>{number(row.initial_stop_price ?? row.stop_price, priceDigits)}</strong></span>
+            <span>2R <strong>{number(row.two_r_price, priceDigits)}</strong></span>
             {row.strategy === "reversal" && <><span>하락 추세선 <strong>{number(row.trendline_price, market === "NASDAQ" ? 2 : 0)}</strong></span><span>거래량 <strong>{number(row.volume_ratio, 2)}×</strong></span><span>상태 <strong>{row.reversal_status ? reversalLabels[row.reversal_status] : "-"}</strong></span><span>재료·주식 구조 <strong>미검증</strong></span></>}
             <a href={chartUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> 외부 차트</a>
           </div>
         </div>
-        <div className="chartAttribution">{market === "NASDAQ" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
+        <div className="chartAttribution">{market === "NASDAQ" && row.strategy !== "reversal" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
       </div>
     </div>
   );
