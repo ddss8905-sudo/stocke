@@ -4,9 +4,10 @@ import { getDashboardData } from "@/lib/data";
 import type { Market, Strategy, Timeframe } from "@/lib/types";
 import { RunButtons } from "./run-buttons";
 import { ResultsPanel } from "./results-panel";
+import { GapDashboard } from "./gap-dashboard";
 
 type PageProps = {
-  searchParams?: Promise<{ market?: string; strategy?: string; timeframe?: string }>;
+  searchParams?: Promise<{ market?: string; strategy?: string; timeframe?: string; date?: string }>;
 };
 
 const markets: Market[] = ["NASDAQ", "KOSDAQ", "KOSPI_API"];
@@ -64,11 +65,26 @@ function Stat({ label, value, icon }: { label: string; value: string; icon: Reac
   );
 }
 
+function StrategyTabs({ market, strategy, timeframe }: { market: Market; strategy: Strategy; timeframe: Timeframe }) {
+  return <nav className="strategyTabs" aria-label="스크리닝 전략">
+    {([['trend', '추세추종'], ['reversal', '저점 반등'], ['gap224', '224일선 갭 돌파']] as const).map(([value, label]) =>
+      <a key={value} aria-current={strategy === value ? "page" : undefined} className={strategy === value ? "tab active" : "tab"} href={`/?market=${market}&strategy=${value}&timeframe=${value === 'gap224' ? 'daily' : timeframe}`}>{label}</a>)}
+    {strategy !== "gap224" && <div className="timeframeTabs" aria-label="봉 기준">
+      {(["daily", "weekly"] as const).map(value => <a key={value} aria-current={timeframe === value ? "page" : undefined} className={timeframe === value ? "tab active" : "tab"} href={`/?market=${market}&strategy=${strategy}&timeframe=${value}`}>{value === "weekly" ? "주봉" : "일봉"}</a>)}
+    </div>}
+  </nav>;
+}
+
 export default async function Page({ searchParams }: PageProps) {
   const params = await searchParams;
   const market = asMarket(params?.market);
-  const strategy: Strategy = params?.strategy === "reversal" ? "reversal" : "trend";
-  const timeframe: Timeframe = params?.timeframe === "weekly" ? "weekly" : "daily";
+  const strategy: Strategy = params?.strategy === "gap224" ? "gap224" : params?.strategy === "reversal" ? "reversal" : "trend";
+  const timeframe: Timeframe = strategy !== "gap224" && params?.timeframe === "weekly" ? "weekly" : "daily";
+  if (strategy === "gap224") return <main>
+    <section className="topbar"><div><p className="eyebrow">Trend & Reversal Screener</p><h1>Market Screener</h1></div><MarketTabs active={market} strategy={strategy} timeframe="daily" /></section>
+    <StrategyTabs market={market} strategy={strategy} timeframe="daily" />
+    <GapDashboard market={market} date={params?.date} />
+  </main>;
   const data = await getDashboardData(market);
   const weekly = timeframe === "weekly";
   const candidates = weekly ? data.weekly?.candidates ?? [] : data.candidates;
@@ -99,13 +115,7 @@ export default async function Page({ searchParams }: PageProps) {
         </div>
       )}
 
-      <nav className="strategyTabs" aria-label="스크리닝 전략">
-        <a aria-current={strategy === "trend" ? "page" : undefined} className={strategy === "trend" ? "tab active" : "tab"} href={`/?market=${market}&strategy=trend&timeframe=${timeframe}`}>추세추종</a>
-        <a aria-current={strategy === "reversal" ? "page" : undefined} className={strategy === "reversal" ? "tab active" : "tab"} href={`/?market=${market}&strategy=reversal&timeframe=${timeframe}`}>저점 반등</a>
-        <div className="timeframeTabs" aria-label="봉 기준">
-          {(["daily", "weekly"] as const).map((value) => <a key={value} aria-current={timeframe === value ? "page" : undefined} className={timeframe === value ? "tab active" : "tab"} href={`/?market=${market}&strategy=${strategy}&timeframe=${value}`}>{value === "weekly" ? "주봉" : "일봉"}</a>)}
-        </div>
-      </nav>
+      <StrategyTabs market={market} strategy={strategy} timeframe={timeframe} />
       {weekly && <div className="notice">{analysis ? `주봉 기준 ${analysis.as_of} · 가격 기준 ${data.weekly?.analysis.price_date} · 마감된 주만 반영` : "이 실행에는 주봉 분석 결과가 없습니다. 새 실행 완료 후 표시됩니다."}</div>}
       <section className="stats">
         <Stat label="Market" value={market} icon={<Database size={18} />} />

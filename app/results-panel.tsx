@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CandlestickChart, ExternalLink, X } from "lucide-react";
-import { CandlestickSeries, ColorType, createChart, HistogramSeries, LineSeries } from "lightweight-charts";
+import { CandlestickSeries, ColorType, createChart, createSeriesMarkers, HistogramSeries, LineSeries } from "lightweight-charts";
 import type { CandlestickData, HistogramData, Time } from "lightweight-charts";
 import type { Market, ReversalAnalysis, ReversalStatus, ScreeningResult, SectorStrength, Strategy, Timeframe } from "@/lib/types";
 
@@ -52,7 +52,8 @@ function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { ma
     const params = new URLSearchParams({ market, ticker, timeframe });
     if (runId) params.set("run", runId);
     if (row.as_of) params.set("asof", row.as_of);
-    fetch(`/api/chart?${params}`, { signal: controller.signal })
+    if (row.strategy === "gap224" && row.as_of) params.set("date", row.as_of);
+    fetch(`${row.strategy === "gap224" ? '/api/gap224/chart' : '/api/chart'}?${params}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Chart request failed");
         const data = await response.json() as { candles: ChartCandle[]; source: string; snapshot?: boolean };
@@ -63,7 +64,7 @@ function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { ma
       })
       .catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, [market, ticker, runId, timeframe, row.as_of, onSource]);
+  }, [market, ticker, runId, timeframe, row.as_of, row.strategy, onSource]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -73,7 +74,7 @@ function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { ma
       height: container.clientHeight,
       layout: { textColor: "#596258", background: { type: ColorType.Solid, color: "#ffffff" }, attributionLogo: false },
       grid: { vertLines: { color: "#f2f5f0" }, horzLines: { color: "#edf0eb" } },
-      timeScale: { borderColor: "#dfe4dc", timeVisible: false },
+      timeScale: { borderColor: "#dfe4dc", timeVisible: false, rightOffset: row.strategy === "gap224" ? 10 : 0 },
       rightPriceScale: { borderColor: "#dfe4dc" },
       crosshair: { mode: 1 },
     });
@@ -90,6 +91,20 @@ function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { ma
     volumes.setData(candles.map(({ time, volume, open, close }) => ({
       time, value: volume, color: close >= open ? "#e9abab" : "#a7c9e3",
     })) as HistogramData<Time>[]);
+    if (isSnapshot && row.strategy === "gap224") {
+      const average = chart.addSeries(LineSeries, { color: "#9264a7", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, title: "MA224" });
+      let sum = 0;
+      const points: { time: Time; value: number }[] = [];
+      candles.forEach((candle, index) => {
+        sum += candle.close;
+        if (index >= 224) sum -= candles[index - 224].close;
+        if (index >= 223) points.push({ time: candle.time as Time, value: sum / 224 });
+      });
+      average.setData(points);
+      if (row.ma224_open != null) prices.createPriceLine({ price: row.ma224_open, color: "#9264a7", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "224 시초" });
+      if (row.open_price != null) prices.createPriceLine({ price: row.open_price, color: "#218773", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "시가" });
+      if (row.as_of && candles.some(candle => candle.time === row.as_of)) createSeriesMarkers(prices, [{ time: row.as_of as Time, position: "aboveBar", color: "#218773", shape: "arrowDown", text: "시가 갭 돌파" }]);
+    }
     if (timeframe === "weekly") {
       for (const [weeks, color] of [[10, "#218773"], [30, "#c69429"], [40, "#596879"]] as const) {
         const average = chart.addSeries(LineSeries, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: `MA${weeks}W` });
@@ -126,7 +141,7 @@ function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { ma
   </div>;
 }
 
-function ChartDialog({ row, market, runId, timeframe, onClose }: { row: ScreeningResult; market: Market; runId: string | null; timeframe: Timeframe; onClose: () => void }) {
+export function ChartDialog({ row, market, runId, timeframe, onClose }: { row: ScreeningResult; market: Market; runId: string | null; timeframe: Timeframe; onClose: () => void }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [chartSource, setChartSource] = useState("");
@@ -154,7 +169,7 @@ function ChartDialog({ row, market, runId, timeframe, onClose }: { row: Screenin
 
   useEffect(() => {
     const container = chartRef.current;
-    if (!container || market !== "NASDAQ" || row.strategy === "reversal" || timeframe === "weekly") return;
+    if (!container || market !== "NASDAQ" || row.strategy === "reversal" || row.strategy === "gap224" || timeframe === "weekly") return;
     const script = document.createElement("script");
     script.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
     script.async = true;
@@ -181,23 +196,25 @@ function ChartDialog({ row, market, runId, timeframe, onClose }: { row: Screenin
         <div className="chartHeader">
           <div>
             <h2 id="chart-title">{row.security_name || row.ticker} <span className="chartTicker">{row.ticker}</span></h2>
-            <p>{market} · {row.sector_name || "업종 미분류"} · {timeframe === "weekly" ? "주봉" : "일봉"}{row.as_of ? ` · ${row.as_of}` : ""}</p>
+            <p>{market} · {row.sector_name || "업종 미분류"} · {row.strategy === "gap224" ? "검출 당시 일봉" : timeframe === "weekly" ? "주봉" : "일봉"}{row.as_of ? ` · ${row.as_of}` : ""}</p>
           </div>
           <button ref={closeRef} className="iconButton" type="button" onClick={onClose} aria-label="차트 닫기" title="차트 닫기"><X size={20} /></button>
         </div>
         <div className="chartBody">
-          {market === "NASDAQ" && row.strategy !== "reversal" && timeframe === "daily" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} runId={runId} row={row} timeframe={timeframe} onSource={setChartSource} />}
+          {market === "NASDAQ" && row.strategy !== "reversal" && row.strategy !== "gap224" && timeframe === "daily" ? <div className="chartWidget" ref={chartRef} /> : <DomesticChart market={market} ticker={row.ticker} runId={runId} row={row} timeframe={timeframe} onSource={setChartSource} />}
           <div className="chartDetails">
+            {row.strategy === "gap224" ? <><span>시초가 <strong>{number(row.open_price, priceDigits)}</strong></span><span>시초가 기준 224일선 <strong>{number(row.ma224_open, 2)}</strong></span><span>검출 당시 조회 가격 <strong>{number(row.close, priceDigits)}</strong></span><span>갭 <strong>{percent(row.gap_pct, 2)}</strong></span></> : <>
             <span>종가 <strong>{number(row.close, priceDigits)}</strong></span>
             <span>{row.strategy === "reversal" ? "돌파 구간" : "매수 구간"} <strong>{row.buy_zone_low == null || row.buy_zone_high == null ? "-" : `${number(row.buy_zone_low, priceDigits)}–${number(row.buy_zone_high, priceDigits)}`}</strong></span>
             <span>초기 손절 <strong>{number(row.initial_stop_price ?? row.stop_price, priceDigits)}</strong></span>
             <span>2R <strong>{number(row.two_r_price, priceDigits)}</strong></span>
+            </>}
             {timeframe === "weekly" && <span className="weeklyLegend"><i className="ma10Key" />MA10W <i className="ma30Key" />MA30W <i className="ma40Key" />MA40W</span>}
             {row.strategy === "reversal" && <><span>하락 추세선 <strong>{number(row.trendline_price, market === "NASDAQ" ? 2 : 0)}</strong></span><span>거래량 <strong>{number(row.volume_ratio, 2)}×</strong></span><span>상태 <strong>{row.reversal_status ? reversalLabels[row.reversal_status] : "-"}</strong></span><span>재료·주식 구조 <strong>미검증</strong></span></>}
             <a href={chartUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> 외부 차트</a>
           </div>
         </div>
-        <div className="chartAttribution">{market === "NASDAQ" && row.strategy !== "reversal" && timeframe === "daily" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
+        <div className="chartAttribution">{market === "NASDAQ" && row.strategy !== "reversal" && row.strategy !== "gap224" && timeframe === "daily" ? "Chart by " : `Prices: ${chartSource || "Loading"} · Chart by `}<a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a></div>
       </div>
     </div>
   );

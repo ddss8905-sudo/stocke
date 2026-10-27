@@ -1,5 +1,5 @@
 export type Market = "NASDAQ" | "KOSDAQ" | "KOSPI_API";
-export type Strategy = "trend" | "reversal";
+export type Strategy = "trend" | "reversal" | "gap224";
 export type Timeframe = "daily" | "weekly";
 export type ReversalStatus = "preparing" | "confirmed" | "tracking" | "volume_wait" | "extended" | "risk_high" | "market_wait";
 export type ReversalAnalysis = { version: number; scanned_count: number; as_of: string; closed_bars_only: boolean; regime_score: number; exposure: number };
@@ -84,6 +84,53 @@ export type ScreeningResult = {
   reversal_status?: ReversalStatus;
   as_of?: string;
   sector_score?: number | null;
+  open_price?: number;
+  ma224_open?: number;
+  gap_pct?: number;
+  detected_at?: string;
+};
+
+export type GapEvent = {
+  ticker: string;
+  security_name: string;
+  sector_name?: string | null;
+  session_date: string;
+  previous_close: number;
+  open_price: number;
+  ma224_previous: number;
+  ma224_open: number;
+  gap_pct: number;
+  breakout_pct: number;
+  current_price?: number;
+  detected_price?: number;
+  above_previous_high: boolean;
+  detected_at: string;
+  updated_at?: string;
+  source: string;
+  late_detection: boolean;
+  validation: "valid" | "review" | "corrected";
+  state?: "holding" | "below" | "unverified" | "corrected";
+};
+
+export type GapSnapshot = {
+  version: number;
+  market: Market;
+  session_date: string;
+  reference_date?: string;
+  updated_at: string;
+  status: "complete" | "partial" | "running" | "preparing" | "closed" | "waiting" | "failed";
+  selected_count?: number;
+  target_count?: number;
+  checked_count?: number;
+  excluded_count?: number;
+  pending_count?: number;
+  baseline_missing_count?: number;
+  error_reasons?: Record<string, number>;
+  valid_count?: number;
+  events: GapEvent[];
+  telegram_configured: boolean;
+  notifications?: Record<string, number>;
+  reconciled?: boolean;
 };
 
 export type SectorStrength = {

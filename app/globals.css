@@ -613,6 +613,11 @@ tr:last-child td {
 .ma10Key { background: #218773; }
 .ma30Key { background: #c69429; }
 .ma40Key { background: #596879; }
+.gapDateForm { display: flex; gap: 8px; align-items: center; }
+.gapHead { flex-wrap: wrap; }
+.gapHead > div { flex: 1 1 240px; min-width: 0; }
+.gapDateForm input[type="date"] { min-width: 0; border: 1px solid var(--line); border-radius: 4px; padding: 8px; font: inherit; color: var(--ink); background: white; }
+.gapLate { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
 @media (max-width: 560px) {
   .timeframeTabs { flex-basis: 100%; margin-left: 0; padding-left: 0; border-left: 0; }
   .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }

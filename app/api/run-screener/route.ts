@@ -29,7 +29,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "market must be NASDAQ, KOSDAQ, or KOSPI_API." }, { status: 400 });
   }
 
-  const workflow = WORKFLOWS[market];
+  const isGap = body.strategy === "gap224";
+  if (isGap && body.action != null && !["scan", "prepare"].includes(body.action)) {
+    return NextResponse.json({ error: "잘못된 갭 검사 요청입니다." }, { status: 400 });
+  }
+  const workflow = isGap ? "gap224.yml" : WORKFLOWS[market];
   const response = await fetch(
     `https://api.github.com/repos/${repository}/actions/workflows/${workflow}/dispatches`,
     {
@@ -40,7 +44,7 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
-      body: JSON.stringify({ ref: branch }),
+      body: JSON.stringify({ ref: branch, ...(isGap ? { inputs: { market, mode: body.action === "prepare" ? "prepare" : "scan" } } : {}) }),
     },
   );
 

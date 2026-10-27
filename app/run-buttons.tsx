@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Play, RefreshCw } from "lucide-react";
+import { Database, Play, RefreshCw } from "lucide-react";
 import type { Market, Strategy, Timeframe } from "@/lib/types";
 
 type RunState = {
@@ -9,16 +9,16 @@ type RunState = {
   message: string;
 };
 
-export function RunButtons({ market, strategy, timeframe }: { market: Market; strategy: Strategy; timeframe: Timeframe }) {
+export function RunButtons({ market, strategy, timeframe, date }: { market: Market; strategy: Strategy; timeframe: Timeframe; date?: string }) {
   const [state, setState] = useState<RunState>({ status: "idle", message: "" });
 
-  async function runNow() {
+  async function runNow(action: "scan" | "prepare" = "scan") {
     setState({ status: "running", message: `Requesting ${market} workflow...` });
     try {
       const response = await fetch("/api/run-screener", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ market }),
+        body: JSON.stringify({ market, strategy, action }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -38,11 +38,12 @@ export function RunButtons({ market, strategy, timeframe }: { market: Market; st
 
   return (
     <div className="runPanel">
-      <button className="primaryButton" type="button" onClick={runNow} disabled={state.status === "running"}>
+      <button className="primaryButton" type="button" onClick={() => runNow()} disabled={state.status === "running"}>
         {state.status === "running" ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
-        Run {market} now
+        {strategy === "gap224" ? "오늘 갭 검사" : `Run ${market} now`}
       </button>
-      <a className="secondaryButton" href={`/?market=${market}&strategy=${strategy}&timeframe=${timeframe}`}>
+      {strategy === "gap224" && <button className="secondaryButton" type="button" onClick={() => runNow("prepare")} disabled={state.status === "running"}><Database size={16} /> 기준 데이터 준비</button>}
+      <a className="secondaryButton" href={`/?market=${market}&strategy=${strategy}&timeframe=${timeframe}${date ? `&date=${encodeURIComponent(date)}` : ''}`}>
         <RefreshCw size={16} />
         Refresh latest
       </a>
