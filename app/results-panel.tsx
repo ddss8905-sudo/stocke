@@ -130,6 +130,7 @@ function DomesticChart({ market, ticker, runId, row, timeframe, onSource }: { ma
       if (row.stop_price != null) prices.createPriceLine({ price: row.stop_price, color: "#cf5656", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "Stop" });
     }
     chart.timeScale().fitContent();
+    if (row.strategy === "gap224") chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candles.length - 224), to: candles.length + 40 });
     const observer = new ResizeObserver(() => chart.resize(container.clientWidth, container.clientHeight));
     observer.observe(container);
     return () => { observer.disconnect(); chart.remove(); };
@@ -317,3 +318,4 @@ export function ResultsPanel({ market, strategy, timeframe, weeklyAnalysis, runI
     {chartRow && <ChartDialog row={chartRow} market={market} runId={runId} timeframe={timeframe} onClose={closeChart} />}
   </>;
 }
+
