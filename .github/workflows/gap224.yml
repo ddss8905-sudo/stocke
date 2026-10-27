@@ -85,7 +85,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r jobs/requirements-gap.txt
       - name: Validate screeners before using credentials
-        run: python -m unittest discover -s jobs/tests -v
+        run: |
+          python -m unittest discover -s jobs/tests -p 'test_gap224.py' -v
+          python -m unittest discover -s jobs/tests -p 'test_kospi_universe.py' -v
+          python -m unittest discover -s jobs/tests -p 'test_reversal.py' -v
+          python -m unittest discover -s jobs/tests -p 'test_weekly.py' -v
       - name: Run gap scanner
         env:
           MARKET: ${{ matrix.market }}
@@ -98,3 +102,4 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python jobs/run_gap224.py --market "$MARKET" --mode "$MODE"
+
