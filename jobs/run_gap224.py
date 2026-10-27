@@ -172,6 +172,8 @@ def scan(store, market, context, reconcile=False):
                "telegram_configured": configured(), "notifications": dict(notifications), "reconciled": reconcile}
     publish(store, market, day, summary)
     print(f"[INFO] gap224 {market}: {checked}/{len(targets)} checked, {summary['valid_count']} valid events, status={summary['status']}")
+    if summary["error_reasons"]:
+        print(f"[INFO] gap224 pending reasons: {summary['error_reasons']}")
     return summary
 
 
@@ -231,3 +233,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

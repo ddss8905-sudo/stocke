@@ -22,7 +22,7 @@ def event_message(market, event):
     return (f"[224일선 갭 돌파] {market}\n{event['security_name']} ({event['ticker']})\n"
             f"거래일 {event['session_date']} · {'지연 확인' if event['late_detection'] else '장초 발견'}\n"
             f"시가 {price(event['open_price'])} / 전일 종가 {price(event['previous_close'])}\n"
-            f"시초가 기준 224일선 {price(event['ma224_open'])}\n"
+            f"시초가 기준 224일선 {event['ma224_open']:,.2f}\n"
             f"갭 +{event['gap_pct']:.2%} / 224일선 대비 +{event['breakout_pct']:.2%}\n"
             f"조회 가격 {price(event.get('current_price', event['open_price']))}\n"
             f"발견 {timestamp(event['detected_at'])}\n"
@@ -73,3 +73,4 @@ def deliver(store, market, event, now_epoch=None):
     result.update({"attempts": claim["attempts"], "next_retry": epoch + result.get("retry_after", 300)})
     store.put(path, result)
     return result["status"]
+
