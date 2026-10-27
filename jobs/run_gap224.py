@@ -154,7 +154,8 @@ def scan(store, market, context, reconcile=False):
                     raise RuntimeError("event_persistence_failed")
                 events[ticker] = first
             original = events[ticker]
-            if abs(original["open_price"] - event["open_price"]) > max(0.00001, original["open_price"] * .000001):
+            if any(abs(original[key] - event[key]) > max(0.00001, original[key] * .000001)
+                   for key in ("open_price", "previous_close", "ma224_previous", "ma224_open")):
                 original.update({"validation": "review", "state": "unverified"})
                 continue
             events[ticker] = current_state({**original, "validation": "valid"}, quote)

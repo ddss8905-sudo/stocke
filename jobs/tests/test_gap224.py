@@ -173,6 +173,21 @@ class GapPipelineTests(unittest.TestCase):
         self.assertEqual(result["checked_count"], 0)
         self.assertEqual(result["pending_count"], 1)
 
+    def test_revised_historical_average_requires_review_without_rewriting_snapshot(self):
+        store, _ = prepared_store()
+        with patch.object(run_gap224, "fetch_quotes", return_value=({"TEST": quote()}, {})):
+            first = run_gap224.scan(store, "KOSDAQ", context())["events"][0]
+            chart = store.get(f"KOSDAQ/{DAY}/charts/TEST.json")
+            baseline_path = f"KOSDAQ/baselines/{REFERENCE}.json"
+            baseline = store.get(baseline_path)
+            baseline["stocks"][0]["sum223"] += 100
+            store.put(baseline_path, baseline)
+            revised = run_gap224.scan(store, "KOSDAQ", context())
+        self.assertEqual(revised["events"][0]["validation"], "review")
+        self.assertEqual(revised["events"][0]["ma224_open"], first["ma224_open"])
+        self.assertEqual(revised["valid_count"], 0)
+        self.assertEqual(store.get(f"KOSDAQ/{DAY}/charts/TEST.json"), chart)
+
     def test_tiny_domestic_rounding_can_be_repaired_but_large_errors_cannot(self):
         frame = history()
         frame.iloc[-5, frame.columns.get_loc("high")] = frame.close.iloc[-5] - .1
