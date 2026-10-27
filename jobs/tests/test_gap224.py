@@ -11,6 +11,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from screeners.gap224 import above, baseline_row, current_state, detect_gap, session_context
+from screeners.gap224_sources import prepare_sources
 from gap_telegram import deliver, event_message
 from gap_store import GapStore
 import run_gap224
@@ -55,6 +56,7 @@ def prepared_store():
     stock = baseline_row("TEST", "Test", frame, REFERENCE, "Tech")
     stock["candles"] = run_gap224.candle_records(frame)
     store.put(f"KOSDAQ/baselines/{REFERENCE}.json", {"version": 1, "reference_date": REFERENCE,
+              "history_source": "KIS/KRX",
               "status": "complete", "stocks": [stock], "missing_count": 0, "selected_count": 1, "excluded_count": 0})
     return store, stock
 
@@ -180,6 +182,28 @@ class GapPipelineTests(unittest.TestCase):
         self.assertIsNone(run_gap224.canonical_history(frame, REFERENCE, "KOSDAQ"))
 
 
+class GapSourceTests(unittest.TestCase):
+    def test_legacy_mixed_source_baseline_is_rebuilt(self):
+        legacy = {"status": "complete"}
+        self.assertFalse(run_gap224.baseline_ready(legacy, "KOSDAQ"))
+        self.assertTrue(run_gap224.baseline_ready({**legacy, "history_source": "KIS/KRX"}, "KOSDAQ"))
+        self.assertTrue(run_gap224.baseline_ready(legacy, "KOSPI_API"))
+
+    def test_kosdaq_baseline_uses_same_kis_source_as_opening_quotes(self):
+        selected = pd.DataFrame({"ticker": ["403870"], "security_name": ["HPSP"]})
+        client = Mock()
+        histories = {"403870": history()}
+        with patch("screeners.kosdaq.select_top_by_adv", return_value=selected), \
+                patch("screeners.kospi_api.KisClient", return_value=client), \
+                patch("screeners.kospi_api.download_ohlcv", return_value=histories) as download, \
+                patch("screeners.kosdaq.download_ohlcv", side_effect=AssertionError("Mixed price basis")), \
+                patch("screeners.sectors.fetch_kind_sectors", return_value={}):
+            _, result, _ = prepare_sources("KOSDAQ", REFERENCE)
+        self.assertIs(result, histories)
+        self.assertEqual(download.call_args.args[0], ["403870"])
+        self.assertEqual(download.call_args.args[2:], (REFERENCE, client))
+
+
 class TelegramTests(unittest.TestCase):
     def setUp(self):
         self.store, baseline = prepared_store()
@@ -254,3 +278,4 @@ class CalendarTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

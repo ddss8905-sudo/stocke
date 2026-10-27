@@ -21,7 +21,8 @@ def prepare_sources(market, reference_date):
         sectors = selected.set_index("ticker").sector_name.to_dict()
     elif market == "KOSDAQ":
         selected = kosdaq.select_top_by_adv(reference_date)
-        histories = kosdaq.download_ohlcv(selected.ticker.tolist(), start, reference_date)
+        client = kospi_api.KisClient()
+        histories = kospi_api.download_ohlcv(selected.ticker.tolist(), start, reference_date, client)
         sectors = fetch_kind_sectors("KOSDAQ")
     else:
         client = kospi_api.KisClient()
@@ -97,3 +98,4 @@ def fetch_quotes(market, tickers, session_date, reference_date):
             except Exception:
                 errors[ticker] = "provider_error"
     return quotes, errors
+

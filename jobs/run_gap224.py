@@ -53,10 +53,15 @@ def candle_records(frame):
             for index, row in frame.iterrows()]
 
 
+def baseline_ready(baseline, market):
+    return bool(baseline and baseline.get("status") == "complete"
+                and (market != "KOSDAQ" or baseline.get("history_source") == "KIS/KRX"))
+
+
 def prepare(store, market, reference_date):
     path = f"{market}/baselines/{reference_date}.json"
     existing = store.get(path)
-    if existing and existing.get("status") == "complete":
+    if baseline_ready(existing, market):
         return existing
     selected, histories, sectors = prepare_sources(market, reference_date)
     if selected.empty:
@@ -80,6 +85,7 @@ def prepare(store, market, reference_date):
     if not valid_count:
         raise RuntimeError("baseline_provider_failure")
     baseline = {"version": 1, "market": market, "reference_date": reference_date,
+                "history_source": "Yahoo Finance" if market == "NASDAQ" else "KIS/KRX",
                 "prepared_at": utc_now().isoformat(), "status": "partial" if missing else "complete",
                 "scope": "liquid_universe", "selected_count": len(selected), "target_count": len(stocks),
                 "valid_history_count": valid_count, "excluded_count": len(excluded), "missing_count": len(missing), "stocks": stocks}
@@ -103,7 +109,7 @@ def scan(store, market, context, reconcile=False):
     publish(store, market, day, {**previous, "status": "running", "events": list(events.values()),
                                 "telegram_configured": configured()})
     baseline = store.get(f"{market}/baselines/{reference}.json")
-    if not baseline or baseline.get("status") != "complete":
+    if not baseline_ready(baseline, market):
         publish(store, market, day, {"status": "preparing", "events": list(events.values()), "telegram_configured": configured()})
         baseline = prepare(store, market, reference)
     if baseline.get("reference_date") != reference:
