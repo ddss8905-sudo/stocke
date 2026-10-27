@@ -234,7 +234,8 @@ def main():
         latest = store.get(f"{args.market}/{context['date']}/summary.json") or previous
         publish(store, args.market, context["date"], {**latest, "status": "failed", "error": type(error).__name__,
                                                      "events": latest.get("events", []), "telegram_configured": configured()})
-        print(f"[ERROR] gap224 {args.market}: {type(error).__name__}; previous records preserved")
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        print(f"[ERROR] gap224 {args.market}: {type(error).__name__}{f' HTTP {status}' if status else ''}; previous records preserved")
         raise SystemExit(1) from None
 
 
