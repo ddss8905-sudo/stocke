@@ -248,27 +248,13 @@ class GapSourceTests(unittest.TestCase):
         self.assertEqual(download.call_args.args[0], ["403870"])
         self.assertEqual(download.call_args.args[2:], (REFERENCE, client))
 
-    def test_kis_token_is_reused_and_rate_limited_issuance_waits(self):
-        response = Mock(status_code=403)
-        response.json.return_value = {"error_code": "EGW00133"}
+    def test_kis_client_is_reused_within_gap_worker(self):
         client = Mock()
         with patch.object(gap224_sources, "_kis_client", None), \
-                patch("screeners.kospi_api.KisClient", side_effect=[requests.HTTPError(response=response), client]) as create, \
-                patch.object(gap224_sources.time, "sleep") as sleep:
+                patch("screeners.kospi_api.KisClient", return_value=client) as create:
             self.assertIs(gap224_sources.get_kis_client(), client)
             self.assertIs(gap224_sources.get_kis_client(), client)
-        self.assertEqual(create.call_count, 2)
-        sleep.assert_called_once_with(65)
-
-    def test_kis_invalid_credentials_are_not_blindly_retried(self):
-        response = Mock(status_code=401)
-        response.json.return_value = {"error_code": "invalid_credentials"}
-        with patch.object(gap224_sources, "_kis_client", None), \
-                patch("screeners.kospi_api.KisClient", side_effect=requests.HTTPError(response=response)) as create, \
-                patch.object(gap224_sources.time, "sleep") as sleep:
-            self.assertRaises(requests.HTTPError, gap224_sources.get_kis_client)
         create.assert_called_once()
-        sleep.assert_not_called()
 
 
 class TelegramTests(unittest.TestCase):

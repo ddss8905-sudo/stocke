@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from datetime import date
@@ -27,6 +28,31 @@ def stock(ticker, market="KOSPI", value="10000000000", name="Company"):
 
 
 class KospiUniverseTests(unittest.TestCase):
+    def test_kis_token_issuance_waits_and_retries_an_explicit_rate_limit(self):
+        limited = Mock(status_code=403)
+        limited.raise_for_status.side_effect = requests.HTTPError(response=limited)
+        limited.json.return_value = {"error_code": "EGW00133"}
+        success = Mock()
+        success.json.return_value = {"access_token": "test-token"}
+        with patch.dict(os.environ, {"KIS_APP_KEY": "test", "KIS_APP_SECRET": "test", "KIS_ACCESS_TOKEN": ""}), \
+                patch.object(kospi_api.requests, "post", side_effect=[limited, success]) as post, \
+                patch.object(kospi_api.time, "sleep") as wait:
+            self.assertEqual(kospi_api.KisClient().access_token, "test-token")
+        self.assertEqual(post.call_count, 2)
+        wait.assert_called_once_with(65)
+
+    def test_kis_rejected_credentials_are_not_retried(self):
+        rejected = Mock(status_code=403)
+        rejected.raise_for_status.side_effect = requests.HTTPError(response=rejected)
+        rejected.json.return_value = {"error_code": "invalid_credentials"}
+        with patch.dict(os.environ, {"KIS_APP_KEY": "test", "KIS_APP_SECRET": "test", "KIS_ACCESS_TOKEN": ""}), \
+                patch.object(kospi_api.requests, "post", return_value=rejected) as post, \
+                patch.object(kospi_api.time, "sleep") as wait:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                kospi_api.KisClient()
+        post.assert_called_once()
+        wait.assert_not_called()
+
     def test_chart_snapshot_preserves_screening_close_and_dates(self):
         history = pd.DataFrame({
             "open": [100.0, 110.0],

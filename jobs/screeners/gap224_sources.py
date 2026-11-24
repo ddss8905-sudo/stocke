@@ -1,7 +1,6 @@
 """Provider adapters; KRX regular-session bars and US regular-session bars only."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
 
 import pandas as pd
 import requests
@@ -16,28 +15,9 @@ def get_kis_client():
     from .kospi_api import KisClient
 
     global _kis_client
-    if _kis_client is not None:
-        return _kis_client
-    for attempt in range(3):
-        try:
-            _kis_client = KisClient()
-            return _kis_client
-        except requests.HTTPError as error:
-            response = error.response
-            status = getattr(response, "status_code", 0)
-            try:
-                body = response.json() if response is not None else {}
-                code = body.get("error_code") or body.get("msg_cd")
-            except ValueError:
-                code = None
-            retryable = status == 429 or status >= 500 or code == "EGW00133"
-            if not retryable or attempt == 2:
-                raise
-        except (requests.Timeout, requests.ConnectionError):
-            if attempt == 2:
-                raise
-        print("[WARN] KIS token temporarily unavailable; waiting before retry")
-        time.sleep(65 * (attempt + 1))
+    if _kis_client is None:
+        _kis_client = KisClient()
+    return _kis_client
 
 
 def prepare_sources(market, reference_date):

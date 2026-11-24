@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
@@ -143,18 +144,33 @@ class KisClient:
         self.access_token = os.environ.get("KIS_ACCESS_TOKEN") or self.fetch_access_token()
 
     def fetch_access_token(self) -> str:
-        response = requests.post(
-            f"{self.base_url}/oauth2/tokenP",
-            json={
-                "grant_type": "client_credentials",
-                "appkey": self.app_key,
-                "appsecret": self.app_secret,
-            },
-            headers={"content-type": "application/json"},
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()["access_token"]
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/oauth2/tokenP",
+                    json={"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret},
+                    headers={"content-type": "application/json"}, timeout=30,
+                )
+                response.raise_for_status()
+                return response.json()["access_token"]
+            except requests.HTTPError as error:
+                response = error.response
+                status = getattr(response, "status_code", 0)
+                try:
+                    body = response.json() if response is not None else {}
+                except ValueError:
+                    body = {}
+                code = (body.get("error_code") or body.get("msg_cd")) if isinstance(body, dict) else None
+                rate_limited = code == "EGW00133" or status == 429
+                if attempt == 2 or not (rate_limited or status >= 500):
+                    raise RuntimeError(f"KIS token request rejected (HTTP {status})") from None
+                reason = "issuance rate limit" if rate_limited else f"HTTP {status}"
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == 2:
+                    raise RuntimeError("KIS token request timed out or could not connect") from None
+                reason = "network unavailable"
+            print(f"[WARN] KIS token temporarily unavailable ({reason}); waiting before retry")
+            time.sleep(65 * (attempt + 1))
 
     def headers(self, tr_id: str) -> Dict[str, str]:
         return {
