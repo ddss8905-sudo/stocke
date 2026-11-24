@@ -1,6 +1,10 @@
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from functools import lru_cache
+from io import BytesIO
 from typing import Dict, List
+from zipfile import BadZipFile, ZipFile
 
 import pandas as pd
 import requests
@@ -14,12 +18,13 @@ from .common import (
     score_universe,
     start_date,
 )
-from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_kind_sectors, fetch_krx_sectors, filter_official_listing
+from .sectors import calculate_sector_strength, complete_domestic_sectors, fetch_kind_listing, fetch_krx_sectors
 
 
 OHLCV_COLUMNS = ["open", "high", "low", "close", "volume"]
 SELECTED_COLUMNS = ["ticker", "security_name", "close", "adv"]
 NAVER_COLUMNS = ["ticker", "security_name", "close", "volume", "value"]
+KIS_MASTER_URL = "https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip"
 EXCLUDE_NAME_KEYWORDS = [
     "ETF", "ETN",
     "KODEX", "TIGER", "ACE", "KBSTAR", "SOL", "HANARO", "KOSEF",
@@ -284,10 +289,53 @@ def parse_number(value) -> float:
     return pd.to_numeric(text, errors="coerce")
 
 
+def parse_kis_kospi_master(data: bytes) -> pd.DataFrame:
+    with ZipFile(BytesIO(data)) as archive:
+        member = archive.getinfo("kospi_code.mst")
+        if member.file_size > 2_000_000:
+            raise ValueError("Unexpected KIS KOSPI master size")
+        lines = archive.read(member).decode("cp949").splitlines()
+    rows = []
+    for line in lines:
+        # The fixed-width numeric/flag suffix is 227 characters, excluding the newline.
+        info, fields = line[:-227], line[-227:]
+        ticker, name = info[:9].strip(), info[21:].strip()
+        if len(info) <= 21 or len(ticker) != 6 or not ticker.isascii() or not ticker.isdigit():
+            continue
+        if fields[:2] != "ST" or fields[29] == "Y" or fields[60:62] != "NN" or fields[158] != "0":
+            continue
+        if not name or is_excluded_name(name):
+            continue
+        price, volume = parse_number(fields[41:50]), parse_number(fields[81:93])
+        rows.append({"ticker": ticker, "security_name": name, "close": price, "adv": price * volume})
+    return pd.DataFrame(rows, columns=SELECTED_COLUMNS).drop_duplicates("ticker")
+
+
+@lru_cache(maxsize=1)
+def fetch_kis_kospi_master() -> pd.DataFrame:
+    response = requests.get(KIS_MASTER_URL, timeout=25)
+    response.raise_for_status()
+    modified = parsedate_to_datetime(response.headers.get("Last-Modified", ""))
+    if not -timedelta(hours=1) <= datetime.now(timezone.utc) - modified <= timedelta(days=7):
+        raise ValueError("KIS KOSPI master is stale")
+    rows = parse_kis_kospi_master(response.content)
+    if len(rows) < min(150, CFG.universe_size):
+        raise ValueError("KIS KOSPI master coverage is too small")
+    return rows
+
+
 def fetch_top_by_current_value(client: KisClient) -> pd.DataFrame:
     naver = fetch_naver_current_value()
     selected = naver.rename(columns={"value": "adv"})[SELECTED_COLUMNS]
     if len(selected) < CFG.universe_size:
+        try:
+            master = fetch_kis_kospi_master()
+            ranked = master.loc[(master.close >= CFG.min_price) & (master.adv > 0)]
+            if len(ranked) >= min(150, CFG.universe_size):
+                print(f"[INFO] KOSPI using KIS master liquidity proxy: {len(ranked)} stocks")
+                return ranked.sort_values("adv", ascending=False).head(CFG.universe_size + 20).reset_index(drop=True)
+        except (requests.RequestException, ValueError, BadZipFile, KeyError, TypeError) as exc:
+            print(f"[WARN] KIS KOSPI master unavailable: {type(exc).__name__}")
         print(f"[WARN] Naver listed {len(selected)} KOSPI stocks; supplementing with KIS volume-rank.")
         kis_rank = client.volume_rank()
         print(f"[INFO] KIS volume-rank returned {len(kis_rank)} rows")
@@ -299,6 +347,23 @@ def fetch_top_by_current_value(client: KisClient) -> pd.DataFrame:
     if len(combined) < min(150, CFG.universe_size):
         raise RuntimeError(f"KOSPI universe is too small to publish: {len(combined)}/{CFG.universe_size}")
     return combined
+
+
+def select_kospi_universe(client: KisClient):
+    selected = fetch_top_by_current_value(client)
+    try:
+        listing = fetch_kind_listing("KOSPI")
+    except (requests.RequestException, ValueError) as exc:
+        print(f"[WARN] KIND KOSPI listing unavailable: {type(exc).__name__}; checking KIS master")
+        listing = {row.ticker: {"name": row.security_name, "sector": ""}
+                   for row in fetch_kis_kospi_master().itertuples(index=False)}
+    verified = selected.loc[selected.ticker.isin(listing)].head(CFG.universe_size).copy()
+    if len(verified) < min(150, CFG.universe_size):
+        raise RuntimeError(f"KOSPI official listing is too small to publish: {len(verified)}/{CFG.universe_size}")
+    verified["security_name"] = verified.ticker.map(lambda ticker: listing[ticker]["name"])
+    sectors = {ticker: listing[ticker]["sector"] for ticker in verified.ticker if listing[ticker]["sector"]}
+    print(f"[INFO] KOSPI verified universe: {len(verified)}/{len(selected)}")
+    return verified.reset_index(drop=True), sectors
 
 
 def download_ohlcv(tickers: List[str], start: str, end: str, client: KisClient) -> Dict[str, pd.DataFrame]:
@@ -325,11 +390,7 @@ def retain_downloaded_universe(ohlcv: Dict[str, pd.DataFrame], universe: pd.Data
 def run(end_date: str) -> dict:
     client = KisClient()
     effective_end_date = resolve_latest_trading_date(end_date)
-    selected = fetch_top_by_current_value(client)
-    selected = filter_official_listing(selected, "KOSPI").head(CFG.universe_size).reset_index(drop=True)
-    if len(selected) < min(150, CFG.universe_size):
-        raise RuntimeError(f"KOSPI official listing is too small to publish: {len(selected)}/{CFG.universe_size}")
-    sectors = fetch_kind_sectors("KOSPI")
+    selected, sectors = select_kospi_universe(client)
     sectors = complete_domestic_sectors(selected["ticker"].tolist(), sectors, client)
     if len(sectors) < len(selected) * 0.8:
         sectors = {**fetch_krx_sectors(effective_end_date, "KOSPI"), **sectors}

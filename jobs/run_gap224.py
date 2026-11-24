@@ -12,7 +12,7 @@ import pandas as pd
 from gap_store import GapStore
 from gap_telegram import configured, deliver, send_message
 from screeners.gap224 import baseline_row, current_state, detect_gap, positive, session_context
-from screeners.gap224_sources import fetch_quotes, prepare_sources
+from screeners.gap224_sources import fetch_quotes, prepare_sources, refresh_kis_history
 
 
 MARKETS = ("NASDAQ", "KOSDAQ", "KOSPI_API")
@@ -102,6 +102,26 @@ def publish(store, market, session_date, snapshot):
         store.put(f"{market}/latest.json", snapshot)
 
 
+def matches_previous(market, stock, quote):
+    previous = quote.get("previous_close")
+    tolerance = max(0.00001, stock["previous_close"] * .000001) if market == "NASDAQ" else .000001
+    return positive(previous) and abs(previous - stock["previous_close"]) <= tolerance
+
+
+def repair_kis_baseline(stock, quote, market, day, reference):
+    try:
+        frame = canonical_history(refresh_kis_history(stock["ticker"], day), reference, market)
+    except Exception:
+        return None
+    if frame is None:
+        return None
+    row = baseline_row(stock["ticker"], stock["security_name"], frame, reference, stock.get("sector_name"))
+    if row is None or not matches_previous(market, row, quote):
+        return None
+    row["candles"] = candle_records(frame)
+    return row
+
+
 def scan(store, market, context, reconcile=False):
     day, reference = context["date"], context["reference_date"]
     previous = store.get(f"{market}/{day}/summary.json") or {}
@@ -116,6 +136,9 @@ def scan(store, market, context, reconcile=False):
         raise RuntimeError("stale_baseline")
     targets = {stock["ticker"]: stock for stock in baseline["stocks"]}
     quotes, errors = fetch_quotes(market, list(targets), day, reference)
+    repair_path = f"{market}/{day}/revalidated-{reference}.json"
+    repairs = (store.get(repair_path) or {}) if market != "NASDAQ" else {}
+    repaired = 0
     checked, notifications = 0, Counter()
     for ticker, stock in targets.items():
         quote = quotes.get(ticker)
@@ -127,9 +150,14 @@ def scan(store, market, context, reconcile=False):
         if market == "NASDAQ" and (not quote.get("regular_market_at") or pd.Timestamp(quote["regular_market_at"]) < context["open"]):
             errors[ticker] = "opening_not_ready"
             continue
-        live_previous = quote.get("previous_close")
-        tolerance = max(0.00001, stock["previous_close"] * 0.000001) if market == "NASDAQ" else 0.000001
-        if not positive(live_previous) or abs(live_previous - stock["previous_close"]) > tolerance:
+        if ticker in repairs and matches_previous(market, repairs[ticker], quote):
+            stock = repairs[ticker]
+        if market != "NASDAQ" and positive(quote.get("previous_close")) and not matches_previous(market, stock, quote):
+            refreshed = repair_kis_baseline(stock, quote, market, day, reference)
+            if refreshed is not None:
+                stock = repairs[ticker] = refreshed
+                repaired += 1
+        if not matches_previous(market, stock, quote):
             errors[ticker] = "price_basis_changed"
             if ticker in events:
                 events[ticker].update({"validation": "review", "state": "unverified"})
@@ -170,6 +198,9 @@ def scan(store, market, context, reconcile=False):
         elif ticker in events:
             events[ticker].update({"validation": "corrected", "state": "corrected", "updated_at": quote.get("quote_at")})
     rows = sorted(events.values(), key=lambda row: row["gap_pct"], reverse=True)
+    if repaired:
+        store.put(repair_path, repairs)
+        print(f"[INFO] gap224 {market}: revalidated {repaired} KIS histories on the current quote basis")
     summary = {"status": "partial" if errors or baseline["missing_count"] else "complete", "reference_date": reference,
                "scope": "liquid_universe", "selected_count": baseline["selected_count"], "target_count": len(targets),
                "checked_count": checked, "excluded_count": baseline["excluded_count"],
@@ -182,6 +213,19 @@ def scan(store, market, context, reconcile=False):
     if summary["error_reasons"]:
         print(f"[INFO] gap224 pending reasons: {summary['error_reasons']}")
     return summary
+
+
+def prepare_after_scan(store, market, context, summary):
+    day = context["date"]
+    try:
+        baseline = prepare(store, market, day)
+        status = baseline["status"]
+    except Exception as error:
+        status = "failed"
+        http = getattr(getattr(error, "response", None), "status_code", None)
+        print(f"[ERROR] gap224 {market}: next baseline {type(error).__name__}{f' HTTP {http}' if http else ''}; saved scan kept")
+    publish(store, market, day, {**summary, "next_baseline_status": status})
+    return status
 
 
 def main():
@@ -222,13 +266,14 @@ def main():
         if args.mode == "reconcile" and not closing_ready:
             raise RuntimeError("market_not_closed")
         summary = scan(store, args.market, context, reconcile=args.mode == "reconcile" or closing_ready)
-        if closing_ready:
-            prepare(store, args.market, context["date"])
+        next_baseline = prepare_after_scan(store, args.market, context, summary) if closing_ready else None
         if not configured():
             print("[WARN] Telegram is not configured; saved events only. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
         elif any(summary["notifications"].get(key) for key in ("unknown", "sending", "failed", "storage_error")):
             print("[ERROR] Telegram delivery not confirmed; scan records were saved. Review delivery status before resending.")
             raise SystemExit(2)
+        if next_baseline == "failed":
+            raise SystemExit(1)
     except Exception as error:
         # No exception text from provider requests: it could contain authentication data.
         latest = store.get(f"{args.market}/{context['date']}/summary.json") or previous
@@ -241,4 +286,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

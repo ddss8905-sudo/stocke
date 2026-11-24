@@ -131,6 +131,7 @@ export type GapSnapshot = {
   telegram_configured: boolean;
   notifications?: Record<string, number>;
   reconciled?: boolean;
+  next_baseline_status?: "complete" | "partial" | "failed";
 };
 
 export type SectorStrength = {

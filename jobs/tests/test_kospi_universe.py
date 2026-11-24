@@ -1,10 +1,13 @@
 import sys
 import unittest
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
+from zipfile import ZipFile
 
 import pandas as pd
+import requests
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -71,11 +74,45 @@ class KospiUniverseTests(unittest.TestCase):
     def test_small_universe_fails_instead_of_publishing_misleading_result(self):
         client = Mock()
         client.volume_rank.return_value = pd.DataFrame(columns=kospi_api.SELECTED_COLUMNS)
-        with patch.object(kospi_api, "fetch_naver_current_value", return_value=pd.DataFrame(columns=kospi_api.NAVER_COLUMNS)):
+        with patch.object(kospi_api, "fetch_naver_current_value", return_value=pd.DataFrame(columns=kospi_api.NAVER_COLUMNS)), \
+                patch.object(kospi_api, "fetch_kis_kospi_master", side_effect=requests.Timeout):
             with self.assertRaisesRegex(RuntimeError, "too small"):
                 kospi_api.fetch_top_by_current_value(client)
+
+    def test_kis_master_excludes_etf_preferred_and_suspended(self):
+        def master_line(ticker, group="ST", preferred="0", flags="NN"):
+            fields = list(" " * 227)
+            fields[:2] = group
+            fields[29] = "N"
+            fields[41:50] = "000005000"
+            fields[60:62] = flags
+            fields[81:93] = "000002000000"
+            fields[158] = preferred
+            return f"{ticker:9}KR7005930003Company" + "".join(fields)
+
+        buf = BytesIO()
+        with ZipFile(buf, "w") as archive:
+            archive.writestr("kospi_code.mst", "\r\n".join([
+                master_line("005930"), master_line("069500", group="EF"),
+                master_line("005935", preferred="1"), master_line("123456", flags="YN"),
+            ]).encode("cp949"))
+        parsed = kospi_api.parse_kis_kospi_master(buf.getvalue())
+        self.assertEqual(parsed.ticker.tolist(), ["005930"])
+        self.assertEqual(parsed.adv.tolist(), [10_000_000_000])
+
+    def test_verified_master_covers_both_listing_outages(self):
+        master = pd.DataFrame({"ticker": [f"{i:06d}" for i in range(220)], "security_name": "KIS name",
+                               "close": 5000.0, "adv": [i * 1e9 for i in range(1, 221)]})
+        client = Mock()
+        with patch.object(kospi_api, "fetch_naver_current_value", return_value=pd.DataFrame(columns=kospi_api.NAVER_COLUMNS)), \
+                patch.object(kospi_api, "fetch_kind_listing", side_effect=requests.HTTPError), \
+                patch.object(kospi_api, "fetch_kis_kospi_master", return_value=master):
+            selected, sectors = kospi_api.select_kospi_universe(client)
+        self.assertEqual(len(selected), 200)
+        self.assertEqual(selected.ticker.iloc[0], "000219")
+        self.assertEqual(sectors, {})
+        client.volume_rank.assert_not_called()
 
 
 if __name__ == "__main__":
     unittest.main()
-

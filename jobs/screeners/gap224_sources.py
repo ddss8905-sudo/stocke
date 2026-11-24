@@ -43,7 +43,7 @@ def get_kis_client():
 def prepare_sources(market, reference_date):
     from . import kosdaq, kospi_api, nasdaq
     from .common import start_date
-    from .sectors import fetch_kind_sectors, filter_official_listing
+    from .sectors import fetch_kind_sectors
 
     module = {"NASDAQ": nasdaq, "KOSDAQ": kosdaq, "KOSPI_API": kospi_api}[market]
     start = start_date(reference_date, module.CFG.lookback_days)
@@ -57,15 +57,21 @@ def prepare_sources(market, reference_date):
         histories = kospi_api.download_ohlcv(selected.ticker.tolist(), start, reference_date, client)
     else:
         client = get_kis_client()
-        selected = filter_official_listing(kospi_api.fetch_top_by_current_value(client), "KOSPI").head(module.CFG.universe_size)
+        selected, sectors = kospi_api.select_kospi_universe(client)
         histories = kospi_api.download_ohlcv(selected.ticker.tolist(), start, reference_date, client)
-    if market != "NASDAQ":
+    if market == "KOSDAQ":
         try:
-            sectors = fetch_kind_sectors("KOSDAQ" if market == "KOSDAQ" else "KOSPI")
+            sectors = fetch_kind_sectors("KOSDAQ")
         except Exception:
             print("[WARN] gap224 sector metadata unavailable; keeping collected price history")
             sectors = {}
     return selected, histories, sectors
+
+
+def refresh_kis_history(ticker, session_date):
+    # Use the quote's end date so KIS applies adjustments on the same date basis.
+    start = (pd.Timestamp(session_date) - pd.Timedelta(days=480)).date().isoformat()
+    return get_kis_client().daily_chart(ticker, start, session_date)
 
 
 def yahoo_quote(ticker, session_date, reference_date):
@@ -133,4 +139,3 @@ def fetch_quotes(market, tickers, session_date, reference_date):
             except Exception:
                 errors[ticker] = "provider_error"
     return quotes, errors
-

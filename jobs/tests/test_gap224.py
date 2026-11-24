@@ -146,12 +146,39 @@ class GapPipelineTests(unittest.TestCase):
 
     def test_adjustment_basis_change_is_pending_not_a_false_gap(self):
         store, _ = prepared_store()
-        result = self.scan(store, {**quote(), "previous_close": 49.})
-        self.assertEqual(result["status"], "partial")
-        self.assertEqual(result["pending_count"], 1)
-        self.assertEqual(result["valid_count"], 0)
-        exact, _ = prepared_store()
-        self.assertEqual(self.scan(exact, {**quote(), "previous_close": 99.})["pending_count"], 1)
+        with patch.object(run_gap224, "refresh_kis_history", return_value=history()):
+            result = self.scan(store, {**quote(), "previous_close": 49.})
+            self.assertEqual(result["status"], "partial")
+            self.assertEqual(result["pending_count"], 1)
+            self.assertEqual(result["valid_count"], 0)
+            exact, _ = prepared_store()
+            self.assertEqual(self.scan(exact, {**quote(), "previous_close": 99.})["pending_count"], 1)
+
+    def test_verified_replacement_recomputes_average_and_is_reused(self):
+        store, _ = prepared_store()
+        frame = history() * .5
+        future = frame.tail(1).set_axis(pd.to_datetime([DAY])) * 100
+        valid_quote = {**quote(51., 51.5), "previous_close": 49.}
+        with patch.object(run_gap224, "refresh_kis_history", return_value=pd.concat([frame, future])) as refresh:
+            first = self.scan(store, valid_quote)
+            second = self.scan(store, valid_quote)
+        refresh.assert_called_once_with("TEST", DAY)
+        self.assertEqual(first["valid_count"], 1)
+        self.assertEqual(first["checked_count"], 1)
+        self.assertEqual(second["valid_count"], 1)
+        self.assertAlmostEqual(first["events"][0]["ma224_open"], (frame.close.tail(223).sum() + 51.) / 224.)
+        self.assertEqual(store.get(f"KOSDAQ/{DAY}/charts/TEST.json")["candles"][-2]["close"], 49.)
+
+    def test_next_baseline_failure_does_not_hide_completed_scan(self):
+        store, _ = prepared_store()
+        summary = self.scan(store, quote())
+        with patch.object(run_gap224, "prepare", side_effect=requests.HTTPError):
+            status = run_gap224.prepare_after_scan(store, "KOSDAQ", context(), summary)
+        saved = store.get(f"KOSDAQ/{DAY}/summary.json")
+        self.assertEqual(status, "failed")
+        self.assertEqual(saved["status"], "complete")
+        self.assertEqual(saved["next_baseline_status"], "failed")
+        self.assertEqual(saved["valid_count"], 1)
 
     def test_no_valid_histories_cannot_publish_a_successful_empty_baseline(self):
         selected = pd.DataFrame([{"ticker": "TEST", "security_name": "Test"}])
@@ -318,4 +345,3 @@ class CalendarTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
